@@ -1,3 +1,6 @@
+pub mod generic_lookup;
+pub mod generic_permutation;
+pub mod multilinear_batching;
 pub mod nested_containers;
 pub mod relation_parameters;
 pub mod relation_types;
