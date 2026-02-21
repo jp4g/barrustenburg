@@ -8,6 +8,8 @@ use crate::ecc::fields::field::Field;
 use crate::ecc::fields::field_params::FieldParams;
 use crate::ecc::groups::affine_element::AffineElement;
 use crate::ecc::groups::element::Element;
+use crate::ecc::scalar_multiplication;
+use crate::ecc::batched_affine_addition;
 
 // =========================================================================
 // Field arithmetic tests
@@ -1839,4 +1841,279 @@ fn wnaf_fixed_simple_hi() {
     let recovered = recover_wnaf_scalar(&table, skew, wnaf_entries, wnaf_bits);
     assert_eq!(recovered[0], 0, "WNAF simple hi: lo should be 0");
     assert_eq!(recovered[1], 1, "WNAF simple hi: hi should be 1");
+}
+
+// =========================================================================
+// Pippenger MSM tests
+// =========================================================================
+
+#[test]
+fn pippenger_empty() {
+    let scalars: Vec<Fr> = vec![];
+    let points: Vec<AffineElement<Bn254G1Params>> = vec![];
+    let result = scalar_multiplication::pippenger_msm::<Bn254G1Params>(&scalars, &points);
+    assert!(result.is_point_at_infinity(), "empty MSM should return infinity");
+}
+
+#[test]
+fn pippenger_all_zeros() {
+    let n = 10;
+    let scalars: Vec<Fr> = vec![Fr::zero(); n];
+    let points: Vec<AffineElement<Bn254G1Params>> = (0..n)
+        .map(|_| Element::<Bn254G1Params>::random_element().to_affine())
+        .collect();
+    let result = scalar_multiplication::pippenger_msm::<Bn254G1Params>(&scalars, &points);
+    assert!(result.is_point_at_infinity(), "all-zero scalars should return infinity");
+}
+
+#[test]
+fn pippenger_single_point() {
+    let scalar = Fr::random_element();
+    let point = Element::<Bn254G1Params>::random_element().to_affine();
+    let expected = Element::from_affine(&point).mul_without_endomorphism(&scalar);
+    let result = scalar_multiplication::pippenger_msm::<Bn254G1Params>(&[scalar], &[point]);
+    let expected_aff = expected.to_affine();
+    let result_aff = result.to_affine();
+    assert_eq!(expected_aff.x, result_aff.x, "single point x mismatch");
+    assert_eq!(expected_aff.y, result_aff.y, "single point y mismatch");
+}
+
+#[test]
+fn small_pippenger_correctness() {
+    let n = 100;
+    let scalars: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+    let points: Vec<AffineElement<Bn254G1Params>> = (0..n)
+        .map(|_| Element::<Bn254G1Params>::random_element().to_affine())
+        .collect();
+
+    let expected = scalar_multiplication::naive_msm::<Bn254G1Params>(&scalars, &points);
+    let result = scalar_multiplication::pippenger_msm::<Bn254G1Params>(&scalars, &points);
+    let expected_aff = expected.to_affine();
+    let result_aff = result.to_affine();
+    assert_eq!(expected_aff.x, result_aff.x, "small pippenger x mismatch");
+    assert_eq!(expected_aff.y, result_aff.y, "small pippenger y mismatch");
+}
+
+#[test]
+fn pippenger_correctness() {
+    let n = 1000;
+    let scalars: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+    let points: Vec<AffineElement<Bn254G1Params>> = (0..n)
+        .map(|_| Element::<Bn254G1Params>::random_element().to_affine())
+        .collect();
+
+    let expected = scalar_multiplication::naive_msm::<Bn254G1Params>(&scalars, &points);
+    let result = scalar_multiplication::pippenger_msm::<Bn254G1Params>(&scalars, &points);
+    let expected_aff = expected.to_affine();
+    let result_aff = result.to_affine();
+    assert_eq!(expected_aff.x, result_aff.x, "pippenger 1000 x mismatch");
+    assert_eq!(expected_aff.y, result_aff.y, "pippenger 1000 y mismatch");
+}
+
+#[test]
+fn pippenger_sparse_scalars() {
+    let n = 200;
+    let mut scalars: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+    let points: Vec<AffineElement<Bn254G1Params>> = (0..n)
+        .map(|_| Element::<Bn254G1Params>::random_element().to_affine())
+        .collect();
+    // Zero out 80% of scalars
+    for i in 0..n {
+        if i % 5 != 0 {
+            scalars[i] = Fr::zero();
+        }
+    }
+
+    let expected = scalar_multiplication::naive_msm::<Bn254G1Params>(&scalars, &points);
+    let result = scalar_multiplication::pippenger_msm::<Bn254G1Params>(&scalars, &points);
+    let expected_aff = expected.to_affine();
+    let result_aff = result.to_affine();
+    assert_eq!(expected_aff.x, result_aff.x, "sparse pippenger x mismatch");
+    assert_eq!(expected_aff.y, result_aff.y, "sparse pippenger y mismatch");
+}
+
+#[test]
+fn pippenger_small_explicit() {
+    // Deterministic 2-point test
+    let g = AffineElement::<Bn254G1Params>::one();
+    let g2 = (Element::from_affine(&g) + g).to_affine();
+    let s1 = Fr::from_limbs([3, 0, 0, 0]);
+    let s2 = Fr::from_limbs([7, 0, 0, 0]);
+    // Expected: 3*G + 7*2G = 3G + 14G = 17G
+    let expected = {
+        let s17 = Fr::from_limbs([17, 0, 0, 0]);
+        Element::from_affine(&g).mul_without_endomorphism(&s17)
+    };
+
+    let result = scalar_multiplication::pippenger_msm::<Bn254G1Params>(&[s1, s2], &[g, g2]);
+    let expected_aff = expected.to_affine();
+    let result_aff = result.to_affine();
+    assert_eq!(expected_aff.x, result_aff.x, "explicit pippenger x mismatch");
+    assert_eq!(expected_aff.y, result_aff.y, "explicit pippenger y mismatch");
+}
+
+#[test]
+fn get_scalar_slice_consistency() {
+    // Verify that extracting all slices and reconstructing yields the original scalar.
+    // Round 0 = topmost bits, round (num_rounds-1) = lowest bits.
+    for _ in 0..100 {
+        let r = Fr::random_element();
+        let raw = r.from_montgomery_form();
+        let scalar = raw.data;
+        let num_bits = 254; // BN254 Fr has 254 bits
+        let slice_size = 7;
+        let num_rounds = (num_bits + slice_size - 1) / slice_size;
+
+        // Reconstruct: start from round 0 (MSB), shift left and OR in each slice
+        let mut reconstructed = [0u64; 4];
+        for round in 0..num_rounds {
+            let slice = scalar_multiplication::get_scalar_slice_test(
+                &scalar, round, slice_size, num_bits,
+            ) as u64;
+
+            // How many bits does this slice contribute?
+            let hi_bit = num_bits - round * slice_size;
+            let actual_bits = if hi_bit < slice_size { hi_bit } else { slice_size };
+
+            // Left shift reconstructed by actual_bits
+            let mut carry = 0u64;
+            for limb in reconstructed.iter_mut() {
+                let new_carry = if actual_bits < 64 {
+                    *limb >> (64 - actual_bits)
+                } else {
+                    *limb
+                };
+                *limb = limb.wrapping_shl(actual_bits as u32) | carry;
+                carry = new_carry;
+            }
+            reconstructed[0] |= slice;
+        }
+
+        assert_eq!(reconstructed[0], scalar[0], "slice consistency limb 0");
+        assert_eq!(reconstructed[1], scalar[1], "slice consistency limb 1");
+        assert_eq!(reconstructed[2], scalar[2], "slice consistency limb 2");
+        assert_eq!(reconstructed[3], scalar[3], "slice consistency limb 3");
+    }
+}
+
+#[test]
+fn radix_sort_correctness() {
+    let mut schedule: Vec<u64> = vec![
+        (5u64 << 32) | 100,
+        (3u64 << 32) | 50,
+        (1u64 << 32) | 200,
+        (7u64 << 32) | 0,
+        (2u64 << 32) | 50,
+        (4u64 << 32) | 100,
+    ];
+    let num_zero = scalar_multiplication::radix_sort_test(&mut schedule);
+
+    // Verify sorted by lower 32 bits
+    for i in 1..schedule.len() {
+        let lo_prev = schedule[i - 1] & 0xFFFFFFFF;
+        let lo_curr = schedule[i] & 0xFFFFFFFF;
+        assert!(lo_prev <= lo_curr, "radix sort order violated at {}", i);
+    }
+    // Verify zero count
+    assert_eq!(num_zero, 1, "should have exactly one zero-bucket entry");
+    // Verify no entries lost
+    assert_eq!(schedule.len(), 6, "sort should preserve entry count");
+}
+
+// =========================================================================
+// Batched affine addition tests
+// =========================================================================
+
+#[test]
+fn batched_affine_reduce_multiple_sequences() {
+    let seq_len = 128;
+    let num_seqs = 5;
+    let mut points = Vec::new();
+    let mut sequence_counts = Vec::new();
+    let mut expected_sums = Vec::new();
+
+    for _ in 0..num_seqs {
+        let seq_points: Vec<AffineElement<Bn254G1Params>> = (0..seq_len)
+            .map(|_| Element::<Bn254G1Params>::random_element().to_affine())
+            .collect();
+
+        // Compute expected sum naively
+        let mut sum = Element::<Bn254G1Params>::infinity();
+        for p in &seq_points {
+            sum.add_assign_affine(p);
+        }
+        expected_sums.push(sum.to_affine());
+
+        points.extend_from_slice(&seq_points);
+        sequence_counts.push(seq_len);
+    }
+
+    let results = batched_affine_addition::batched_affine_add_in_place::<Bn254G1Params>(
+        &mut points,
+        &mut sequence_counts,
+    );
+
+    assert_eq!(results.len(), num_seqs);
+    for (i, (result, expected)) in results.iter().zip(expected_sums.iter()).enumerate() {
+        assert_eq!(result.x, expected.x, "seq {} x mismatch", i);
+        assert_eq!(result.y, expected.y, "seq {} y mismatch", i);
+    }
+}
+
+#[test]
+fn batched_affine_single_sequence() {
+    let seq_len = 64;
+    let mut points: Vec<AffineElement<Bn254G1Params>> = (0..seq_len)
+        .map(|_| Element::<Bn254G1Params>::random_element().to_affine())
+        .collect();
+    let mut sequence_counts = vec![seq_len];
+
+    let mut expected = Element::<Bn254G1Params>::infinity();
+    for p in points.iter() {
+        expected.add_assign_affine(p);
+    }
+    let expected_aff = expected.to_affine();
+
+    let results = batched_affine_addition::batched_affine_add_in_place::<Bn254G1Params>(
+        &mut points,
+        &mut sequence_counts,
+    );
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].x, expected_aff.x, "single seq x mismatch");
+    assert_eq!(results[0].y, expected_aff.y, "single seq y mismatch");
+}
+
+#[test]
+fn batched_affine_odd_lengths() {
+    let lengths = [3, 5, 7, 11, 13];
+    let mut points = Vec::new();
+    let mut sequence_counts = Vec::new();
+    let mut expected_sums = Vec::new();
+
+    for &len in &lengths {
+        let seq_points: Vec<AffineElement<Bn254G1Params>> = (0..len)
+            .map(|_| Element::<Bn254G1Params>::random_element().to_affine())
+            .collect();
+
+        let mut sum = Element::<Bn254G1Params>::infinity();
+        for p in &seq_points {
+            sum.add_assign_affine(p);
+        }
+        expected_sums.push(sum.to_affine());
+
+        points.extend_from_slice(&seq_points);
+        sequence_counts.push(len);
+    }
+
+    let results = batched_affine_addition::batched_affine_add_in_place::<Bn254G1Params>(
+        &mut points,
+        &mut sequence_counts,
+    );
+
+    assert_eq!(results.len(), lengths.len());
+    for (i, (result, expected)) in results.iter().zip(expected_sums.iter()).enumerate() {
+        assert_eq!(result.x, expected.x, "odd seq {} x mismatch", i);
+        assert_eq!(result.y, expected.y, "odd seq {} y mismatch", i);
+    }
 }
