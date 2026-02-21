@@ -152,3 +152,77 @@ With this analysis, `common` does NOT need to be ported as a standalone module t
 
 **Date**: 2026-02-20
 **Decision**: Same as `crypto_blake3s_full` — use `blake3` with `default-features = false`. The `common` dependency is only `assert.hpp` + `constexpr_utils.hpp`, both of which are Rust built-ins. Need to investigate what distinguishes this from `crypto_blake3s_full`.
+
+---
+
+## Port #8: `numeric` (Layer 1)
+
+**Date**: 2026-02-20
+**C++ source**: `barretenberg/cpp/src/barretenberg/numeric/`
+**Rust module**: `src/numeric/`
+
+### Approach
+
+Backed by `crypto-bigint` (v0.6, RustCrypto, NCC-audited, constant-time by default).
+
+| BB C++ type | Rust equivalent | Notes |
+|-------------|-----------------|-------|
+| `uint128_t` | Native `u128` | BB only has custom impl for 32-bit/i386 |
+| `uint256_t` | `crypto_bigint::Uint<4>` (aliased as `U256`) | Thin extension trait for BB-compat methods |
+| `uint512_t` (`uintx<uint256_t>`) | `crypto_bigint::Uint<8>` (aliased as `U512`) | `lo()`/`hi()` via `split()`/`concat()` |
+| `uint1024_t` (`uintx<uint512_t>`) | `crypto_bigint::Uint<16>` (aliased as `U1024`) | Same pattern |
+| Bit operations | Rust built-ins + thin wrappers | `u64::leading_zeros()`, etc. |
+| RNG | `rand` crate | `OsRng` for crypto, `StdRng::seed_from_u64` for debug |
+
+### What was implemented
+
+1. **`src/numeric/uint256.rs`** — Type alias `U256 = Uint<4>` plus `U256Ext` trait providing:
+   - `get_msb()` — MSB position via `bits_vartime()`
+   - `get_bit(index)` — via `bit_vartime()`
+   - `slice(start, end)` — bit-range extraction via shift + mask
+   - `from_limbs([u64; 4])` / `limbs()` — construction from/to raw limbs
+   - All arithmetic (+, -, *, /, %, shifts, comparisons) provided by crypto-bigint's built-in operator impls
+   - `widening_mul()` → returns `Uint<8>` (U512) — provided by crypto-bigint
+   - `div_rem()` — provided by crypto-bigint
+   - `to_be_bytes()` / `from_be_bytes()` — via crypto-bigint `Encoding` trait
+
+2. **`src/numeric/uintx.rs`** — Type aliases `U512 = Uint<8>`, `U1024 = Uint<16>` plus `U512Ext` trait:
+   - `lo()` / `hi()` — via crypto-bigint `split()`
+   - `from_lo_hi(lo, hi)` — via crypto-bigint `concat()`
+
+3. **`src/numeric/bitop/mod.rs`** — Standalone functions matching BB's `numeric::` namespace:
+   - `get_msb64()`, `get_msb32()`, `count_leading_zeros64()`, `keep_n_lsb()`
+   - `pow64()`, `is_power_of_two()`, `round_up_power_2()`
+   - `ceil_div()` (from BB's `general/general.hpp`)
+
+4. **`src/numeric/random/mod.rs`** — RNG wrappers:
+   - `get_random_u64()`, `get_random_u256()` — OS entropy via `rand::rng()`
+   - `DebugRng` struct — deterministic, seeded, for tests
+
+### What was NOT ported
+
+- **`sparse_form.hpp`** — Circuit-specific number decomposition into base-b digits. Not needed until stdlib circuit builder layers. Deferred.
+- **`uintx::divmod()` with hardcoded curve constants** — Barrett reduction optimized for BN254/secp256k1/secp256r1 moduli. This is field-arithmetic-specific and will be addressed in the `ecc` module. For now, `div_rem()` from crypto-bigint covers general division.
+- **`uintx::invmod()`** — Extended Euclidean modular inverse. Deferred to `ecc` module.
+- **Serialization (`read`/`write`/`msgpack`)** — BB's binary serialization format. Deferred until needed by a downstream consumer. crypto-bigint provides `to_be_bytes()`/`from_be_bytes()` which covers the basic case.
+- **WASM 29-bit limb multiplication path** — crypto-bigint handles WASM internally.
+
+### Tests
+
+19 new tests across all submodules:
+- uint256: limb roundtrip, get_msb, get_bit, slice (including cross-limb), big-endian roundtrip, div_rem, widening_mul
+- uintx: lo/hi roundtrip, widening mul to U512, mod reduction pattern
+- bitop: get_msb64, keep_n_lsb, pow64, ceil_div, power_of_two
+- random: deterministic RNG, seed independence, OS entropy
+
+### Dependencies added
+
+- `crypto-bigint = "0.6"`
+- `rand = "0.9"`
+
+### Key learnings
+
+- `crypto-bigint::concat()` semantics: `self.concat(&hi)` where `self` is lo, argument is hi. Easy to get backwards.
+- `bit_vartime()` and `bits_vartime()` take `u32`, not `usize`.
+- `Encoding` trait must be imported for `to_be_bytes()`/`from_be_bytes()`.
+- crypto-bigint's `Uint<LIMBS>` is parameterized on limb count (not bit count), so U256 = `Uint<4>`.

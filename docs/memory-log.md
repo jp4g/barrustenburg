@@ -32,6 +32,19 @@ All 5 Layer 0 crypto modules in BB implement standard algorithms from scratch (n
 - **Test against known constants first** (e.g. empty-input hash digests), then cross-validate against C++ test vectors.
 - **Higher-level wrappers** (like `Keccak::hash` returning `bb::fr`) depend on types from other modules (`ecc`, `numeric`). Port the wrapper when those modules arrive; don't introduce placeholder types.
 
+## numeric module — crypto-bigint
+
+- **U256 = `crypto_bigint::Uint<4>`** (parameterized on limb count, not bit count)
+- U512 = `Uint<8>`, U1024 = `Uint<16>`
+- `concat()` semantics: `lo.concat(&hi)` — self is low bits, arg is high bits
+- `split()` returns `(lo, hi)` — matches concat order
+- `bit_vartime()` / `bits_vartime()` take `u32`, not `usize`
+- `Encoding` trait must be imported for `to_be_bytes()` / `from_be_bytes()`
+- BB's `uint256_t` is "not optimized, doesn't touch hot paths" — pure integer arithmetic, field reduction happens in `ecc`
+- `uintx::divmod()` has hardcoded curve constants (BN254, secp256k1, secp256r1) — this logic belongs in `ecc`, not `numeric`
+- `sparse_form` is circuit-specific — defer until stdlib layers
+- BB's `uint128_t` is only custom on 32-bit/i386; on 64-bit it's just `__int128` → Rust native `u128`
+
 ## Dependency graph insights
 
 - `common` is the most foundational module (8+ dependents) — port it early
