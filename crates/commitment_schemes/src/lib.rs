@@ -11,8 +11,8 @@ pub mod batch_mul;
 pub mod claim_batcher;
 
 pub mod kzg;
+pub mod gemini;
 pub mod ipa {}
-pub mod gemini {}
 pub mod shplonk {}
 pub mod small_subgroup_ipa {}
 
