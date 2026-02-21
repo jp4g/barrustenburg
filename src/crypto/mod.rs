@@ -3,3 +3,7 @@ pub mod poseidon2;
 pub mod generators;
 pub mod pedersen_commitment;
 pub mod pedersen_hash;
+pub mod blake2s;
+pub mod sha256;
+pub mod aes128;
+pub mod blake3s;

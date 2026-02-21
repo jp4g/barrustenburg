@@ -32,15 +32,12 @@ mod tests {
 
     #[test]
     fn test_hash_consistency() {
-        // Input: 4 copies of 0x9a807b615c4d3e2fa0b1c2d3e4f56789fedcba9876543210abcdef0123456789
         let val = Fr::from_limbs([
             0xabcdef0123456789,
             0xfedcba9876543210,
             0xa0b1c2d3e4f56789,
             0x9a807b615c4d3e2f,
         ]);
-        // Note: In C++ test, a and b lack "0x" prefix but c and d have it.
-        // BB's fr(string) treats both the same way - as hex. So all 4 are identical.
         let input = [val, val, val, val];
         let result = Poseidon2::hash(&input);
 
