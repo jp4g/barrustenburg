@@ -950,9 +950,15 @@ impl<P: FieldParams> Field<P> {
     /// Two paths:
     /// - 254-bit (BN254 Fr): modulus[3] < 0x4000000000000000
     /// - 384-bit (secp256k1 Fr): modulus[3] >= 0x4000000000000000
-    pub fn split_into_endomorphism_scalars(&self) -> ([u64; 2], [u64; 2]) {
+    ///
+    /// Returns `(k1, k2)` as full field elements where `k = k1 - k2*lambda (mod p)`.
+    /// Half-scalars may be "negative" (close to p); the caller is responsible for
+    /// sign detection via `data[3] >> 62 != 0` and negation before WNAF encoding.
+    /// Matches C++ `split_into_endomorphism_scalars` / `split_into_endomorphism_scalars_384`.
+    pub fn split_into_endomorphism_scalars(&self) -> (Self, Self) {
         if !P::MODULUS_IS_BIG {
             // 254-bit path (BN254 Fr)
+            // C++ field_declarations.hpp:460-505
             let input = self.reduce();
 
             let endo_g1 = Self::from_raw([P::ENDO_G1_LO, P::ENDO_G1_MID, P::ENDO_G1_HI, 0]);
@@ -961,17 +967,13 @@ impl<P: FieldParams> Field<P> {
                 Self::from_raw([P::ENDO_MINUS_B1_LO, P::ENDO_MINUS_B1_MID, 0, 0]);
             let endo_b2 = Self::from_raw([P::ENDO_B2_LO, P::ENDO_B2_MID, 0, 0]);
 
-            // c1 = (g2 * k) >> 256
             let c1 = endo_g2.mul_512(&input);
-            // c2 = (g1 * k) >> 256
             let c2 = endo_g1.mul_512(&input);
 
             let c1_hi = Self::from_raw([c1[4], c1[5], c1[6], c1[7]]);
             let c2_hi = Self::from_raw([c2[4], c2[5], c2[6], c2[7]]);
 
-            // q1 = c1_hi * (-b1), take low 256 bits
             let q1 = c1_hi.mul_512(&endo_minus_b1);
-            // q2 = c2_hi * b2, take low 256 bits
             let q2 = c2_hi.mul_512(&endo_b2);
 
             let q1_lo = Self::from_raw([q1[0], q1[1], q1[2], q1[3]]);
@@ -981,9 +983,11 @@ impl<P: FieldParams> Field<P> {
             let beta = Self::cube_root_of_unity();
             let t2 = (t1 * beta + input).reduce();
 
-            ([t2.data[0], t2.data[1]], [t1.data[0], t1.data[1]])
+            // C++: k1_out = t2; k2_out = t1;
+            (t2, t1)
         } else {
             // 384-bit path (secp256k1 Fr)
+            // C++ field_declarations.hpp:507-552
             use crypto_bigint::{U256, U512};
 
             let minus_b1f =
@@ -1006,7 +1010,6 @@ impl<P: FieldParams> Field<P> {
             let kf = self.reduce();
             let k = U256::from_words([kf.data[0], kf.data[1], kf.data[2], kf.data[3]]);
 
-            // c1 = (k * g1) >> 384
             let k_wide = U512::from((k, U256::ZERO));
             let g1_wide = U512::from((g1, U256::ZERO));
             let g2_wide = U512::from((g2, U256::ZERO));
@@ -1014,15 +1017,12 @@ impl<P: FieldParams> Field<P> {
             let c1_full = k_wide.wrapping_mul(&g1_wide);
             let c2_full = k_wide.wrapping_mul(&g2_wide);
 
-            // >> 384 = shift right by 384 bits = take words [6] and [7] of the 512-bit result
             let c1_words: [u64; 8] = c1_full.to_words();
             let c2_words: [u64; 8] = c2_full.to_words();
 
-            // 384 / 64 = 6, so c >> 384 starts at word index 6
             let c1_val = [c1_words[6], c1_words[7], 0u64, 0u64];
             let c2_val = [c2_words[6], c2_words[7], 0u64, 0u64];
 
-            // Convert to field and to Montgomery form for multiplication
             let mut c1f = Self::from_raw(c1_val);
             let mut c2f = Self::from_raw(c2_val);
             c1f = c1f.to_montgomery_form();
@@ -1034,20 +1034,9 @@ impl<P: FieldParams> Field<P> {
             let r2f = c1f - c2f;
             let beta = Self::cube_root_of_unity();
             let r1f = self.reduce() - r2f * beta;
-            let neg_r2f = r2f.negate();
 
-            // r1f and neg_r2f are already in standard form (not Montgomery):
-            // - c1f/c2f were computed via Montgomery(mont_value) * raw(minus_b1f) = standard result
-            // - r2f * beta = standard * Montgomery(beta) = standard result
-            // - self.reduce() is standard form (caller passes from_montgomery_form())
-            // So just reduce and extract limbs directly.
-            let r1_reduced = r1f.reduce();
-            let r2_reduced = neg_r2f.reduce();
-
-            (
-                [r1_reduced.data[0], r1_reduced.data[1]],
-                [r2_reduced.data[0], r2_reduced.data[1]],
-            )
+            // C++: k1_out = r1f; k2_out = -r2f;
+            (r1f, r2f.negate())
         }
     }
 

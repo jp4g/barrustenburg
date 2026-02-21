@@ -501,8 +501,12 @@ impl<C: CurveParams> Element<C> {
             lookup_table[i].add_assign_element(&d2);
         }
 
-        // Split scalar into two half-scalars
-        let (k1, k2) = converted_scalar.split_into_endomorphism_scalars();
+        // Split scalar into two half-scalars.
+        // C++ pair-returning version only works for 254-bit moduli (static_assert).
+        // For those curves, the half-scalars always fit in 128 bits (lower 2 limbs).
+        let (k1_full, k2_full) = converted_scalar.split_into_endomorphism_scalars();
+        let k1 = [k1_full.data[0], k1_full.data[1]];
+        let k2 = [k2_full.data[0], k2_full.data[1]];
 
         // Compute interleaved WNAF for both half-scalars
         let mut wnaf_table = [0u64; NUM_ROUNDS * 2];
@@ -514,6 +518,7 @@ impl<C: CurveParams> Element<C> {
         let mut accumulator = Self::infinity();
         let beta = BaseField::<C>::cube_root_of_unity();
 
+        // C++ element_impl.hpp:685-702
         for i in 0..(NUM_ROUNDS * 2) {
             let wnaf_entry = wnaf_table[i];
             let index = (wnaf_entry & 0x0fffffff) as usize;
@@ -534,7 +539,7 @@ impl<C: CurveParams> Element<C> {
             }
         }
 
-        // Skew correction
+        // Skew correction (C++ element_impl.hpp:704-709)
         if skew {
             let neg = Self::new(lookup_table[0].x, lookup_table[0].y.negate(), lookup_table[0].z);
             accumulator.add_assign_element(&neg);
@@ -552,8 +557,12 @@ impl<C: CurveParams> Element<C> {
     }
 
     /// Scalar multiplication: dispatches to endomorphism or basic path.
+    ///
+    /// C++ mul_with_endomorphism only compiles for 254-bit scalar fields
+    /// (the pair-returning split has a static_assert). For big-modulus curves
+    /// like secp256k1, always use the basic path.
     pub fn mul(&self, scalar: &ScalarField<C>) -> Self {
-        if C::USE_ENDOMORPHISM {
+        if C::USE_ENDOMORPHISM && !<C::ScalarFieldParams as FieldParams>::MODULUS_IS_BIG {
             self.mul_with_endomorphism(scalar)
         } else {
             self.mul_without_endomorphism(scalar)

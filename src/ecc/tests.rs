@@ -887,50 +887,65 @@ fn field_mul_512_cross_limb() {
 
 // =========================================================================
 // split_into_endomorphism_scalars tests
+// Matches C++ fr.test.cpp SplitIntoEndomorphismScalars / SplitIntoEndomorphismScalarsSimple
 // =========================================================================
 
-#[test]
-fn bn254_fr_split_endomorphism_scalars() {
-    // Split a known scalar and verify k1 + k2 * lambda == k (mod r)
-    let k = Fr::from(12345u64);
-    let k_conv = k.from_montgomery_form();
-    let (k1_limbs, k2_limbs) = k_conv.split_into_endomorphism_scalars();
+/// Helper to verify BN254 Fr endomorphism split: k1 - k2*lambda == k
+/// Matches C++ fr.test.cpp SplitIntoEndomorphismScalars exactly:
+///   fr::split_into_endomorphism_scalars(k, k1, k2);
+///   k1.self_to_montgomery_form();
+///   k2.self_to_montgomery_form();
+///   fr result = k1 - k2 * lambda;
+///   result.self_from_montgomery_form();
+///   EXPECT_EQ(result, k);
+fn verify_bn254_endo_split(k: Fr) {
+    let (k1, k2) = k.split_into_endomorphism_scalars();
 
-    // Reconstruct: k1 + k2 * lambda mod r
-    let k1 = Fr::from_limbs([k1_limbs[0], k1_limbs[1], 0, 0]);
-    let k2 = Fr::from_limbs([k2_limbs[0], k2_limbs[1], 0, 0]);
+    // C++: k1.self_to_montgomery_form(); k2.self_to_montgomery_form();
+    let k1_mont = k1.to_montgomery_form();
+    let k2_mont = k2.to_montgomery_form();
+
     let lambda = Fr::from_raw(Bn254FrParams::CUBE_ROOT);
-    let reconstructed = k1 + k2 * lambda;
-    assert_eq!(reconstructed, k, "k1 + k2*lambda should equal k (mod r)");
+    let result = (k1_mont - k2_mont * lambda).from_montgomery_form();
+
+    assert_eq!(result, k, "k1 - k2*lambda should equal k");
 }
 
 #[test]
-fn bn254_fr_split_endomorphism_scalars_one() {
-    let k = Fr::one();
-    let k_conv = k.from_montgomery_form();
-    let (k1_limbs, k2_limbs) = k_conv.split_into_endomorphism_scalars();
+fn bn254_fr_split_endomorphism_scalars() {
+    // C++ SplitIntoEndomorphismScalars: fr k = fr::random_element()
+    let k = Fr::random_element();
+    verify_bn254_endo_split(k);
+}
 
-    let k1 = Fr::from_limbs([k1_limbs[0], k1_limbs[1], 0, 0]);
-    let k2 = Fr::from_limbs([k2_limbs[0], k2_limbs[1], 0, 0]);
-    let lambda = Fr::from_raw(Bn254FrParams::CUBE_ROOT);
-    let reconstructed = k1 + k2 * lambda;
-    assert_eq!(reconstructed, k, "split of 1 should reconstruct to 1");
+#[test]
+fn bn254_fr_split_endomorphism_scalars_simple() {
+    // C++ SplitIntoEndomorphismScalarsSimple: fr input = {1, 0, 0, 0}
+    let k = Fr::from_raw([1, 0, 0, 0]);
+    verify_bn254_endo_split(k);
 }
 
 #[test]
 fn secp256k1_fr_split_endomorphism_scalars() {
-    let k = Secp256k1Fr::from(999999u64);
-    let k_conv = k.from_montgomery_form();
-    let (k1_limbs, k2_limbs) = k_conv.split_into_endomorphism_scalars();
+    // C++ secp256k1::GetEndomorphismScalars: 2048 iterations with random_element()
+    // C++: split_into_endomorphism_scalars(k, k1, k2);
+    //      if (k2.get_msb() > 200) { k2 = -k2; k2_neg = true; }
+    //      EXPECT_LT(k1.get_msb(), 129); EXPECT_LT(k2.get_msb(), 129);
+    //      if (k2_neg) k2 = -k2;  // undo
+    //      k1.self_to_montgomery_form(); k2.self_to_montgomery_form();
+    //      expected = k1 - k2 * beta; expected.self_from_montgomery_form();
+    //      EXPECT_EQ(k, expected);
+    for _ in 0..2048 {
+        let k = Secp256k1Fr::random_element();
+        let (k1, k2) = k.split_into_endomorphism_scalars();
 
-    let k1 = Secp256k1Fr::from_limbs([k1_limbs[0], k1_limbs[1], 0, 0]);
-    let k2 = Secp256k1Fr::from_limbs([k2_limbs[0], k2_limbs[1], 0, 0]);
-    let lambda = Secp256k1Fr::from_raw(Secp256k1FrParams::CUBE_ROOT);
-    let reconstructed = k1 + k2 * lambda;
-    assert_eq!(
-        reconstructed, k,
-        "secp256k1: k1 + k2*lambda should equal k (mod r)"
-    );
+        // C++: k1.self_to_montgomery_form(); k2.self_to_montgomery_form();
+        let k1_mont = k1.to_montgomery_form();
+        let k2_mont = k2.to_montgomery_form();
+        let beta = Secp256k1Fr::from_raw(Secp256k1FrParams::CUBE_ROOT);
+        let result = (k1_mont - k2_mont * beta).from_montgomery_form();
+        assert_eq!(result, k, "secp256k1: k1 - k2*beta should equal k");
+    }
 }
 
 // =========================================================================
@@ -1006,43 +1021,101 @@ fn wnaf_interleaved_two_scalars() {
     }
 }
 
+#[test]
+fn wnaf_fixed_with_endo_split() {
+    // Matches C++ WnafFixedWithEndoSplit:
+    //   fr k = engine.get_random_uint256(); k.data[3] &= 0x0fffffffffffffffUL;
+    //   split(k) -> k1, k2
+    //   fixed_wnaf each with wnaf_bits=5
+    //   recover from WNAF
+    //   verify k1_recovered - k2_recovered * lambda == k
+    use crate::ecc::groups::wnaf;
+
+    // C++: k = random, top limb masked to fit < 2^252
+    let mut k = Fr::random_element();
+    k.data[3] &= 0x0fffffffffffffff;
+
+    let (k1_full, k2_full) = k.split_into_endomorphism_scalars();
+    let k1_limbs = [k1_full.data[0], k1_full.data[1]];
+    let k2_limbs = [k2_full.data[0], k2_full.data[1]];
+
+    // C++: WNAF_SIZE(5) = (127 + 5 - 1) / 5 = 26
+    let wnaf_bits = 5usize;
+    let wnaf_entries = (wnaf::SCALAR_BITS + wnaf_bits - 1) / wnaf_bits;
+    let mut wnaf_table = vec![0u64; wnaf_entries + 1];
+    let mut endo_wnaf_table = vec![0u64; wnaf_entries + 1];
+    let mut skew = false;
+    let mut endo_skew = false;
+
+    // C++: wnaf::fixed_wnaf<1, 5>(&k1.data[0], wnaf, skew, 0);
+    wnaf::fixed_wnaf(&k1_limbs, &mut wnaf_table, &mut skew, 0, 1, wnaf_bits);
+    wnaf::fixed_wnaf(&k2_limbs, &mut endo_wnaf_table, &mut endo_skew, 0, 1, wnaf_bits);
+
+    // C++: recover_fixed_wnaf(wnaf, skew, k1_recovered.data[1], k1_recovered.data[0], 5);
+    fn recover_wnaf(table: &[u64], skew: bool, num_entries: usize, wnaf_bits: usize) -> [u64; 2] {
+        let mut recovered: i128 = 0;
+        for i in 0..num_entries {
+            let entry = table[i];
+            let val = (entry & 0x0fffffff) as i128;
+            let sign = ((entry >> 31) & 1) != 0;
+            let actual = (2 * val + 1) * if sign { -1 } else { 1 };
+            recovered = recovered * (1i128 << wnaf_bits) + actual;
+        }
+        if skew {
+            recovered -= 1;
+        }
+        [recovered as u64, (recovered >> 64) as u64]
+    }
+
+    let k1_recovered = recover_wnaf(&wnaf_table, skew, wnaf_entries, wnaf_bits);
+    let k2_recovered = recover_wnaf(&endo_wnaf_table, endo_skew, wnaf_entries, wnaf_bits);
+
+    // C++: result = k2_recovered * lambda; result = k1_recovered - result; EXPECT_EQ(result, k);
+    let k1 = Fr::from_limbs([k1_recovered[0], k1_recovered[1], 0, 0]);
+    let k2 = Fr::from_limbs([k2_recovered[0], k2_recovered[1], 0, 0]);
+    let lambda = Fr::from_raw(Bn254FrParams::CUBE_ROOT);
+    let result = (k1 - k2 * lambda).from_montgomery_form();
+    assert_eq!(result, k, "WNAF+endo split recovery should match original k");
+}
+
 // =========================================================================
 // mul_with_endomorphism tests
+// Matches C++ affine_element.test.cpp MulWithEndomorphismMatchesMulWithoutEndomorphism:
+//   for 100 random elements, verify mul_with_endomorphism == mul_without_endomorphism
 // =========================================================================
 
 #[test]
 fn bn254_mul_with_endomorphism_matches_basic() {
+    // C++ MulWithEndomorphismMatchesMulWithoutEndomorphism:
+    //   for (int i = 0; i < 100; i++) {
+    //       auto x1 = element(affine_element::random_element());
+    //       auto f1 = fr::random_element();
+    //       auto r1 = mul_without_endomorphism(x1, f1);
+    //       auto r2 = mul_with_endomorphism(x1, f1);
+    //       EXPECT_EQ(r1, r2);
+    //   }
     let g = Element::<Bn254G1Params>::one();
-    // Test with several scalar values
-    for val in [1u64, 2, 7, 42, 12345, 999999] {
-        let scalar = Fr::from(val);
-        let expected = g.mul_without_endomorphism(&scalar);
-        let result = g.mul_with_endomorphism(&scalar);
-        assert_eq!(
-            result, expected,
-            "endomorphism mul should match basic mul for scalar={}",
-            val
-        );
+    for _ in 0..100 {
+        let x1 = g.mul_without_endomorphism(&Fr::random_element());
+        let f1 = Fr::random_element();
+        let r1 = x1.mul_without_endomorphism(&f1);
+        let r2 = x1.mul_with_endomorphism(&f1);
+        assert_eq!(r1, r2, "endomorphism mul should match basic mul");
     }
 }
 
 #[test]
-fn bn254_mul_with_endomorphism_large_scalar() {
+fn bn254_mul_with_endomorphism_by_minus_one() {
+    // C++ TestAffineElement BatchEndomorphismByMinusOne: -1 * P == -P
     let g = Element::<Bn254G1Params>::one();
-    let scalar = Fr::from_limbs([
-        0xDEADBEEF12345678,
-        0xCAFEBABE87654321,
-        0x1234567890ABCDEF,
-        0x0FEDCBA098765432,
-    ]);
-    let expected = g.mul_without_endomorphism(&scalar);
-    let result = g.mul_with_endomorphism(&scalar);
-    assert_eq!(result, expected, "endomorphism mul should match for large scalar");
+    let minus_one = Fr::one().negate();
+    let result = g.mul_with_endomorphism(&minus_one);
+    let expected = -g;
+    assert_eq!(result, expected, "-1 * G should equal -G");
 }
 
 #[test]
 fn bn254_mul_dispatch() {
-    // Test that mul() dispatches to endomorphism path and gives correct result
     let g = Element::<Bn254G1Params>::one();
     let scalar = Fr::from(42u64);
     let expected = g.mul_without_endomorphism(&scalar);
@@ -1050,20 +1123,10 @@ fn bn254_mul_dispatch() {
     assert_eq!(result, expected, "mul() should match mul_without_endomorphism");
 }
 
-#[test]
-fn secp256k1_mul_with_endomorphism_matches_basic() {
-    let g = Element::<Secp256k1G1Params>::one();
-    for val in [1u64, 2, 7, 42, 12345] {
-        let scalar = Secp256k1Fr::from(val);
-        let expected = g.mul_without_endomorphism(&scalar);
-        let result = g.mul_with_endomorphism(&scalar);
-        assert_eq!(
-            result, expected,
-            "secp256k1: endomorphism mul should match basic mul for scalar={}",
-            val
-        );
-    }
-}
+// Note: C++ mul_with_endomorphism has a static_assert(modulus_3 < 0x4000...)
+// in the pair-returning split, so it only compiles for 254-bit scalar fields.
+// secp256k1 (256-bit modulus) does NOT use mul_with_endomorphism in C++.
+// The secp256k1 endomorphism split is only used in tests and Pippenger MSM.
 
 #[test]
 fn mul_with_endomorphism_zero_returns_infinity() {
@@ -1088,55 +1151,63 @@ fn mul_with_endomorphism_infinity_returns_infinity() {
 // batch_normalize tests
 // =========================================================================
 
+// Matches C++ g1.test.cpp / grumpkin.test.cpp BatchNormalize:
+//   Creates random points with non-trivial z (a + b where a,b are random),
+//   batch normalizes, then verifies x_normalized * z_orig^2 == x_orig
+//   and y_normalized * z_orig^3 == y_orig.
 #[test]
 fn batch_normalize_matches_individual() {
     let g = Element::<Bn254G1Params>::one();
-    let mut points: Vec<Element<Bn254G1Params>> = Vec::new();
+    let num_points = 2; // C++ uses num_points = 2
 
-    // Create several points with different z-coordinates
-    for i in 1..=8u64 {
-        points.push(g.scalar_mul(&[i, 0, 0, 0]));
+    // C++: element a = element::random_element(); element b = element::random_element(); points[i] = a + b;
+    let mut points: Vec<Element<Bn254G1Params>> = Vec::new();
+    let mut normalized: Vec<Element<Bn254G1Params>> = Vec::new();
+    for _ in 0..num_points {
+        let a = g.mul_without_endomorphism(&Fr::random_element());
+        let b = g.mul_without_endomorphism(&Fr::random_element());
+        let point = a + b;
+        points.push(point);
+        normalized.push(point);
     }
 
-    // Save expected affine coordinates
-    let expected_affines: Vec<_> = points.iter().map(|p| p.to_affine()).collect();
+    Element::batch_normalize(&mut normalized);
 
-    // Batch normalize
-    Element::batch_normalize(&mut points);
-
-    // Verify each normalized point matches
-    for (i, point) in points.iter().enumerate() {
-        let affine = point.to_affine();
-        assert_eq!(
-            affine, expected_affines[i],
-            "batch_normalize mismatch at index {}",
-            i
-        );
-        // z should be 1 after normalization
-        assert_eq!(point.z, Fq::one(), "z should be 1 after batch_normalize");
+    // C++ verification: result_x = normalized[i].x * zz; EXPECT_EQ(result_x == points[i].x, true);
+    for i in 0..num_points {
+        let zz = points[i].z.sqr();
+        let zzz = points[i].z * zz;
+        let result_x = normalized[i].x * zz;
+        let result_y = normalized[i].y * zzz;
+        assert_eq!(result_x, points[i].x, "batch_normalize x mismatch at {}", i);
+        assert_eq!(result_y, points[i].y, "batch_normalize y mismatch at {}", i);
     }
 }
 
 #[test]
 fn batch_normalize_with_infinity() {
     let g = Element::<Bn254G1Params>::one();
-    let mut points = vec![
-        g.scalar_mul(&[1, 0, 0, 0]),
-        Element::infinity(),
-        g.scalar_mul(&[3, 0, 0, 0]),
-    ];
+    let point0 = g.mul_without_endomorphism(&Fr::random_element())
+        + g.mul_without_endomorphism(&Fr::random_element());
+    let point2 = g.mul_without_endomorphism(&Fr::random_element())
+        + g.mul_without_endomorphism(&Fr::random_element());
 
-    let expected_0 = points[0].to_affine();
-    let expected_2 = points[2].to_affine();
+    let orig0 = point0;
+    let orig2 = point2;
 
+    let mut points = vec![point0, Element::infinity(), point2];
     Element::batch_normalize(&mut points);
 
-    assert_eq!(points[0].to_affine(), expected_0);
-    assert!(
-        points[1].is_point_at_infinity() || points[1].z == Fq::one(),
-        "infinity point should be handled"
-    );
-    assert_eq!(points[2].to_affine(), expected_2);
+    // Verify non-infinity points
+    let zz = orig0.z.sqr();
+    let zzz = orig0.z * zz;
+    assert_eq!(points[0].x * zz, orig0.x);
+    assert_eq!(points[0].y * zzz, orig0.y);
+
+    let zz = orig2.z.sqr();
+    let zzz = orig2.z * zz;
+    assert_eq!(points[2].x * zz, orig2.x);
+    assert_eq!(points[2].y * zzz, orig2.y);
 }
 
 #[test]
@@ -1148,8 +1219,13 @@ fn batch_normalize_empty() {
 #[test]
 fn batch_normalize_single() {
     let g = Element::<Bn254G1Params>::one();
-    let mut points = vec![g.scalar_mul(&[5, 0, 0, 0])];
-    let expected = points[0].to_affine();
+    let orig = g.mul_without_endomorphism(&Fr::random_element())
+        + g.mul_without_endomorphism(&Fr::random_element());
+    let mut points = vec![orig];
     Element::batch_normalize(&mut points);
-    assert_eq!(points[0].to_affine(), expected);
+
+    let zz = orig.z.sqr();
+    let zzz = orig.z * zz;
+    assert_eq!(points[0].x * zz, orig.x);
+    assert_eq!(points[0].y * zzz, orig.y);
 }
