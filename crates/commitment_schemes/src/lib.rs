@@ -13,7 +13,7 @@ pub mod claim_batcher;
 pub mod kzg;
 pub mod gemini;
 pub mod ipa;
-pub mod shplonk {}
+pub mod shplonk;
 pub mod small_subgroup_ipa {}
 
 #[cfg(test)]
