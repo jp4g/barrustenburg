@@ -110,6 +110,7 @@ impl FieldParams for Bn254FrParams {
         0x1d9598e8a7e39857, 0x2ba010aa41eb7786, 0x39aa886bdbf356b5, 0x47b5002d75fb35e5,
     ];
     const MODULUS_IS_BIG: bool = false; // 0x3064... < 0x4000...
+    const HAS_HIGH_2ADICITY: bool = true; // BN254 Fr has 2-adicity 28
 
     // GLV endomorphism constants for BN254 Fr
     const ENDO_G1_LO: u64 = 0x7a7bd9d4391eb18d;

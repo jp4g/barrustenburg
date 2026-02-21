@@ -29,6 +29,10 @@ pub trait FieldParams: 'static + Send + Sync + Sized {
     /// Whether the modulus >= 2^254. Controls which add/sub/mul path is used.
     const MODULUS_IS_BIG: bool;
 
+    /// Whether this field supports large FFT-friendly subgroups (high 2-adicity).
+    /// True for BN254 Fr (2-adicity = 28). Default false.
+    const HAS_HIGH_2ADICITY: bool = false;
+
     // --- GLV endomorphism constants (defaults to 0, override for curves with endomorphism) ---
     const ENDO_G1_LO: u64 = 0;
     const ENDO_G1_MID: u64 = 0;

@@ -907,6 +907,41 @@ impl<P: FieldParams> Field<P> {
         Self::from_raw(P::CUBE_ROOT)
     }
 
+    /// The 2-adicity of this field: number of trailing zeros of (p - 1).
+    pub fn primitive_root_log_size() -> usize {
+        let p_minus_1_lo = P::MODULUS[0].wrapping_sub(1);
+        // Count trailing zeros across all limbs
+        if p_minus_1_lo != 0 {
+            return p_minus_1_lo.trailing_zeros() as usize;
+        }
+        let mut count = 64usize;
+        for i in 1..4 {
+            if P::MODULUS[i] != 0 {
+                count += P::MODULUS[i].trailing_zeros() as usize;
+                break;
+            }
+            count += 64;
+        }
+        count
+    }
+
+    /// Get a primitive root of unity for a subgroup of size `2^subgroup_size`.
+    /// Starts from the stored PRIMITIVE_ROOT and squares down.
+    pub fn get_root_of_unity(subgroup_size: usize) -> Self {
+        let mut r = Self::from_raw(P::PRIMITIVE_ROOT);
+        let log_size = Self::primitive_root_log_size();
+        assert!(
+            subgroup_size <= log_size,
+            "requested subgroup 2^{} exceeds 2-adicity {}",
+            subgroup_size,
+            log_size
+        );
+        for _ in subgroup_size..log_size {
+            r = r.sqr();
+        }
+        r
+    }
+
     /// Serialize to 32 big-endian bytes (from Montgomery form).
     ///
     /// Converts from Montgomery form to standard integer representation,
