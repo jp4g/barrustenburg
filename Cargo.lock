@@ -72,6 +72,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bbrs-srs"
+version = "0.1.0"
+dependencies = [
+ "bbrs-ecc",
+]
+
+[[package]]
 name = "blake2"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
