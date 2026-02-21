@@ -5,3 +5,6 @@
 pub mod sumcheck;
 pub mod sumcheck_output;
 pub mod sumcheck_round;
+
+#[cfg(test)]
+mod tests;
