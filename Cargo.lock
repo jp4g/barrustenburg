@@ -72,6 +72,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bbrs-srs"
+version = "0.1.0"
+dependencies = [
+ "bbrs-ecc",
+]
+
+[[package]]
 name = "bbrs-transcript"
 version = "0.1.0"
 dependencies = [
