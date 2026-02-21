@@ -100,6 +100,16 @@ pub fn ecdsa_verify_signature<H: Hasher, C: CurveParams>(
         return false;
     }
 
+    // Check raw r and s are in range [1, modulus) per ECDSA specification
+    let r_raw = read_be_u256_bytes(&signature.r);
+    let s_raw = read_be_u256_bytes(&signature.s);
+    let modulus = C::ScalarFieldParams::MODULUS;
+    if cmp_u256(&r_raw, &modulus) != std::cmp::Ordering::Less
+        || cmp_u256(&s_raw, &modulus) != std::cmp::Ordering::Less
+    {
+        return false;
+    }
+
     // Parse r and s from bytes
     let r_fr = ScalarField::<C>::from_be_bytes(&signature.r);
     let s_fr = ScalarField::<C>::from_be_bytes(&signature.s);
@@ -232,6 +242,15 @@ pub fn ecdsa_recover_public_key<H: Hasher, C: CurveParams>(
     Some(pk.to_affine())
 }
 
+/// Read 32 big-endian bytes as [u64; 4] limbs (little-endian order).
+fn read_be_u256_bytes(bytes: &[u8; 32]) -> [u64; 4] {
+    let d3 = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+    let d2 = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
+    let d1 = u64::from_be_bytes(bytes[16..24].try_into().unwrap());
+    let d0 = u64::from_be_bytes(bytes[24..32].try_into().unwrap());
+    [d0, d1, d2, d3]
+}
+
 /// Compare two u256 values represented as [u64; 4] limbs (little-endian).
 fn cmp_u256(a: &[u64; 4], b: &[u64; 4]) -> std::cmp::Ordering {
     for i in (0..4).rev() {
@@ -253,8 +272,10 @@ fn add_with_carry(a: u64, b: u64, carry: u64) -> (u64, u64) {
 mod tests {
     use super::*;
     use crate::crypto::hashers::Sha256Hasher;
+    use crate::ecc::curves::grumpkin::GrumpkinG1Params;
     use crate::ecc::curves::secp256k1::Secp256k1G1Params;
-    use crate::ecc::curves::secp256r1::Secp256r1G1Params;
+    use crate::ecc::curves::secp256r1::{Secp256r1FqParams, Secp256r1G1Params};
+    use crate::ecc::fields::field::Field;
 
     fn make_keypair<C: CurveParams>() -> EcdsaKeyPair<C> {
         let private_key = ScalarField::<C>::random_element();
@@ -314,5 +335,154 @@ mod tests {
             &sig,
         );
         assert!(!valid, "ECDSA should reject tampered message");
+    }
+
+    #[test]
+    fn ecdsa_recover_public_key_secp256r1() {
+        let account = make_keypair::<Secp256r1G1Params>();
+        let message = "test ECDSA recovery on secp256r1";
+        let sig = ecdsa_construct_signature::<Sha256Hasher, Secp256r1G1Params>(message, &account);
+        let recovered =
+            ecdsa_recover_public_key::<Sha256Hasher, Secp256r1G1Params>(message, &sig);
+        assert!(recovered.is_some(), "should recover public key on secp256r1");
+        assert_eq!(
+            recovered.unwrap(),
+            account.public_key,
+            "secp256r1 recovered key should match original"
+        );
+    }
+
+    #[test]
+    fn ecdsa_verify_signature_grumpkin_sha256() {
+        let account = make_keypair::<GrumpkinG1Params>();
+        let message = "test ECDSA message for Grumpkin";
+        let sig = ecdsa_construct_signature::<Sha256Hasher, GrumpkinG1Params>(message, &account);
+        let valid =
+            ecdsa_verify_signature::<Sha256Hasher, GrumpkinG1Params>(message, &account.public_key, &sig);
+        assert!(valid, "ECDSA signature should verify on Grumpkin");
+    }
+
+    #[test]
+    fn ecdsa_check_overflowing_r_and_s_are_rejected() {
+        // Sign on Grumpkin, then tamper r by adding the modulus
+        let account = make_keypair::<GrumpkinG1Params>();
+        let message = "AAAA"; // hex "41414141" in C++ test
+        let mut sig = ecdsa_construct_signature::<Sha256Hasher, GrumpkinG1Params>(message, &account);
+
+        // Verify original is valid
+        let valid = ecdsa_verify_signature::<Sha256Hasher, GrumpkinG1Params>(
+            message,
+            &account.public_key,
+            &sig,
+        );
+        assert!(valid, "original sig should verify");
+
+        // Save original r
+        let orig_r = sig.r;
+
+        // Tamper r: add Fr::modulus (GrumpkinFr = BN254 Fq) to make r overflow
+        // Read r as big-endian u256
+        let r_val = read_be_u256(&sig.r);
+        let modulus = <GrumpkinG1Params as CurveParams>::ScalarFieldParams::MODULUS;
+        let new_r = add_u256(&r_val, &modulus);
+        write_be_u256(&mut sig.r, &new_r);
+
+        let valid = ecdsa_verify_signature::<Sha256Hasher, GrumpkinG1Params>(
+            message,
+            &account.public_key,
+            &sig,
+        );
+        assert!(!valid, "overflowing r should be rejected");
+
+        // Restore r, tamper s
+        sig.r = orig_r;
+        let s_val = read_be_u256(&sig.s);
+        let new_s = add_u256(&s_val, &modulus);
+        write_be_u256(&mut sig.s, &new_s);
+
+        let valid = ecdsa_verify_signature::<Sha256Hasher, GrumpkinG1Params>(
+            message,
+            &account.public_key,
+            &sig,
+        );
+        assert!(!valid, "overflowing s should be rejected");
+    }
+
+    #[test]
+    fn ecdsa_verify_signature_secp256r1_sha256_nist_1() {
+        type R1Fq = Field<Secp256r1FqParams>;
+
+        // NIST test vector
+        let p_x = R1Fq::from_limbs([0x3c59ff46c271bf83, 0xd3565de94bbfb12f, 0xf033bfa248db8fcc, 0x1ccbe91c075fc7f4]);
+        let p_y = R1Fq::from_limbs([0xdc7ccd5ca89a4ca9, 0x6db7ca93b7404e78, 0x1a1fdb2c0e6113e0, 0xce4014c68811f9a2]);
+
+        let public_key = AffineElement::<Secp256r1G1Params>::new(p_x, p_y);
+
+        let r: [u8; 32] = [
+            0xf3, 0xac, 0x80, 0x61, 0xb5, 0x14, 0x79, 0x5b, 0x88, 0x43, 0xe3, 0xd6, 0x62, 0x95, 0x27, 0xed,
+            0x2a, 0xfd, 0x6b, 0x1f, 0x6a, 0x55, 0x5a, 0x7a, 0xca, 0xbb, 0x5e, 0x6f, 0x79, 0xc8, 0xc2, 0xac,
+        ];
+        let s: [u8; 32] = [
+            0x74, 0x08, 0x87, 0xe5, 0x35, 0xfa, 0x59, 0x4e, 0x87, 0x93, 0x89, 0xd9, 0xd4, 0x08, 0xc8, 0xe2,
+            0xcd, 0x4f, 0x48, 0x94, 0xbd, 0xa8, 0x87, 0x2a, 0xb6, 0xeb, 0xf0, 0x98, 0x30, 0x5d, 0x9c, 0x4e,
+        ];
+        let sig = EcdsaSignature { r, s, v: 27 };
+
+        // Message is a hex-encoded binary blob
+        let message_hex = "5905238877c77421f73e43ee3da6f2d9e2ccad5fc942dcec0cbd25482935faaf\
+                           416983fe165b1a045ee2bcd2e6dca3bdf46c4310a7461f9a37960ca672d3feb54\
+                           73e253605fb1ddfd28065b53cb5858a8ad28175bf9bd386a5e471ea7a65c17cc9\
+                           34a9d791e91491eb3754d03799790fe2d308d16146d5c9b0d0debd97d79ce8";
+        let message_bytes = hex_to_bytes(message_hex);
+        let message = std::str::from_utf8(&message_bytes).unwrap_or_else(|_| {
+            // Message contains non-UTF8 bytes; use unsafe conversion since
+            // our ECDSA takes &str but the C++ test passes raw bytes as string
+            unsafe { std::str::from_utf8_unchecked(&message_bytes) }
+        });
+
+        let valid = ecdsa_verify_signature::<Sha256Hasher, Secp256r1G1Params>(
+            message,
+            &public_key,
+            &sig,
+        );
+        assert!(valid, "NIST secp256r1 SHA-256 test vector should verify");
+    }
+
+    /// Helper: read 32 big-endian bytes as [u64; 4] limbs (little-endian order)
+    fn read_be_u256(bytes: &[u8; 32]) -> [u64; 4] {
+        let d3 = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let d2 = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
+        let d1 = u64::from_be_bytes(bytes[16..24].try_into().unwrap());
+        let d0 = u64::from_be_bytes(bytes[24..32].try_into().unwrap());
+        [d0, d1, d2, d3]
+    }
+
+    /// Helper: write [u64; 4] limbs as 32 big-endian bytes
+    fn write_be_u256(bytes: &mut [u8; 32], val: &[u64; 4]) {
+        bytes[0..8].copy_from_slice(&val[3].to_be_bytes());
+        bytes[8..16].copy_from_slice(&val[2].to_be_bytes());
+        bytes[16..24].copy_from_slice(&val[1].to_be_bytes());
+        bytes[24..32].copy_from_slice(&val[0].to_be_bytes());
+    }
+
+    /// Helper: add two u256 values (may overflow into 257+ bits, top bits discarded)
+    fn add_u256(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+        let mut result = [0u64; 4];
+        let mut carry = 0u64;
+        for i in 0..4 {
+            let sum = a[i] as u128 + b[i] as u128 + carry as u128;
+            result[i] = sum as u64;
+            carry = (sum >> 64) as u64;
+        }
+        result
+    }
+
+    /// Helper: decode hex string to bytes
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        let hex = hex.replace(char::is_whitespace, "");
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
     }
 }

@@ -3,7 +3,7 @@ use crate::ecc::curves::grumpkin::GrumpkinG1Params;
 use crate::ecc::curves::secp256k1::{
     Secp256k1FqParams, Secp256k1FrParams, Secp256k1G1Params, Secp256k1Fr,
 };
-use crate::ecc::curves::secp256r1::{Secp256r1FqParams, Secp256r1G1Params};
+use crate::ecc::curves::secp256r1::{Secp256r1FqParams, Secp256r1FrParams, Secp256r1G1Params};
 use crate::ecc::fields::field::Field;
 use crate::ecc::fields::field_params::FieldParams;
 use crate::ecc::groups::affine_element::AffineElement;
@@ -1228,4 +1228,615 @@ fn batch_normalize_single() {
     let zzz = orig.z * zz;
     assert_eq!(points[0].x * zz, orig.x);
     assert_eq!(points[0].y * zzz, orig.y);
+}
+
+// =========================================================================
+// Missing field tests — ported from C++ fr.test.cpp / fq.test.cpp
+// =========================================================================
+
+#[test]
+fn bn254_fr_montgomery_consistency_check() {
+    for _ in 0..100 {
+        let a = Fr::random_element();
+        let roundtrip = a.from_montgomery_form().to_montgomery_form();
+        assert_eq!(a, roundtrip, "from_mont(to_mont(a)) should equal a");
+    }
+}
+
+#[test]
+fn bn254_fq_montgomery_consistency_check() {
+    for _ in 0..100 {
+        let a = Fq::random_element();
+        let roundtrip = a.from_montgomery_form().to_montgomery_form();
+        assert_eq!(a, roundtrip, "from_mont(to_mont(a)) should equal a");
+    }
+}
+
+#[test]
+fn bn254_fr_add_mul_consistency() {
+    for _ in 0..100 {
+        let a = Fr::random_element();
+        let b = Fr::random_element();
+        let c = Fr::random_element();
+        let lhs = (a + b) * c;
+        let rhs = a * c + b * c;
+        assert_eq!(lhs, rhs, "(a+b)*c should equal a*c + b*c");
+    }
+}
+
+#[test]
+fn bn254_fr_sub_mul_consistency() {
+    for _ in 0..100 {
+        let a = Fr::random_element();
+        let b = Fr::random_element();
+        let c = Fr::random_element();
+        let lhs = (a - b) * c;
+        let rhs = a * c - b * c;
+        assert_eq!(lhs, rhs, "(a-b)*c should equal a*c - b*c");
+    }
+}
+
+#[test]
+fn bn254_fr_mul_sqr_consistency() {
+    for _ in 0..100 {
+        let a = Fr::random_element();
+        assert_eq!(a * a, a.sqr(), "a*a should equal a.sqr()");
+    }
+}
+
+#[test]
+fn bn254_fq_add_mul_consistency() {
+    for _ in 0..100 {
+        let a = Fq::random_element();
+        let b = Fq::random_element();
+        let c = Fq::random_element();
+        let lhs = (a + b) * c;
+        let rhs = a * c + b * c;
+        assert_eq!(lhs, rhs, "(a+b)*c should equal a*c + b*c");
+    }
+}
+
+#[test]
+fn bn254_fq_sub_mul_consistency() {
+    for _ in 0..100 {
+        let a = Fq::random_element();
+        let b = Fq::random_element();
+        let c = Fq::random_element();
+        let lhs = (a - b) * c;
+        let rhs = a * c - b * c;
+        assert_eq!(lhs, rhs, "(a-b)*c should equal a*c - b*c");
+    }
+}
+
+#[test]
+fn bn254_fq_mul_sqr_consistency() {
+    for _ in 0..100 {
+        let a = Fq::random_element();
+        assert_eq!(a * a, a.sqr(), "a*a should equal a.sqr()");
+    }
+}
+
+#[test]
+fn bn254_fr_lambda() {
+    let cube_root = Fr::cube_root_of_unity();
+    let one = Fr::one();
+    assert_ne!(cube_root, one, "cube root should not be 1");
+    assert_eq!(cube_root * cube_root * cube_root, one, "cube_root^3 should be 1");
+}
+
+#[test]
+fn bn254_fq_beta() {
+    let cube_root = Fq::cube_root_of_unity();
+    let one = Fq::one();
+    assert_ne!(cube_root, one, "cube root should not be 1");
+    assert_eq!(cube_root * cube_root * cube_root, one, "cube_root^3 should be 1");
+}
+
+#[test]
+fn bn254_fr_invert_one_is_one() {
+    assert_eq!(Fr::one().invert(), Fr::one(), "1.invert() should be 1");
+}
+
+#[test]
+fn bn254_fq_invert_one_is_one() {
+    assert_eq!(Fq::one().invert(), Fq::one(), "1.invert() should be 1");
+}
+
+#[test]
+fn bn254_fr_sqrt_random() {
+    for _ in 0..100 {
+        let a = Fr::random_element();
+        let a_sq = a.sqr();
+        let (found, root) = a_sq.sqrt();
+        assert!(found, "a^2 should have a sqrt");
+        assert!(root == a || root == a.negate(), "sqrt(a^2) should be +/- a");
+    }
+}
+
+#[test]
+fn bn254_fq_sqrt_random() {
+    for _ in 0..100 {
+        let a = Fq::random_element();
+        let a_sq = a.sqr();
+        let (found, root) = a_sq.sqrt();
+        assert!(found, "a^2 should have a sqrt");
+        assert!(root == a || root == a.negate(), "sqrt(a^2) should be +/- a");
+    }
+}
+
+// --- secp256k1 regression tests ---
+
+#[test]
+fn secp256k1_fq_neg_and_self_neg_zero() {
+    type K1Fq = Field<Secp256k1FqParams>;
+    let a = K1Fq::zero();
+    let a_neg = a.negate();
+    assert_eq!(a, a_neg, "-0 should equal 0");
+}
+
+#[test]
+fn secp256k1_fq_montgomery_mul_big_bug() {
+    type K1Fq = Field<Secp256k1FqParams>;
+    let a = K1Fq::from_limbs([0xfffffffe630dc02f, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff]);
+    let a_sqr = a.sqr();
+    let expected = K1Fq::from_limbs([0x60381e557e100000, 0, 0, 0]);
+    assert_eq!(a_sqr, expected, "secp256k1 Fq MontgomeryMulBigBug regression");
+}
+
+// --- secp256r1 regression tests ---
+
+#[test]
+fn secp256r1_fr_montgomery_mul_big_bug() {
+    type R1Fr = Field<Secp256r1FrParams>;
+    // C++ sets a.data[] directly — this is raw Montgomery-form limbs
+    let a = R1Fr::from_raw([0xC5BF4F6AFF993D09, 0xA3361BDA67E62E0E, 0xAAAAAAAAAAAAAAAA, 0xFFFFFFFFE38E38E3]);
+    let a_sqr = a.sqr();
+    let expected = R1Fr::from_limbs([0x57abc6aa0349c084, 0x65b21b232a4cb7a5, 0x5ba781948b0fcd6e, 0xd6e9e0644bda12f7]);
+    assert_eq!(a_sqr, expected, "secp256r1 Fr MontgomeryMulBigBug regression");
+}
+
+#[test]
+fn secp256r1_fq_addition_subtraction_regression() {
+    type R1Fq = Field<Secp256r1FqParams>;
+    let mut fq1 = R1Fq::from_limbs([0xfffffe0000000200, 0x200fffff9ff, 0xfffffbfffffffe00, 0xfffffbff00000400]);
+    let fq2 = R1Fq::from_limbs([0xfffffe0000000200, 0x200fffff9ff, 0xfffffbfffffffe00, 0xfffffbff00000400]);
+    // fq1 += (modulus - 2) + 2 = modulus -> wraps to same value
+    let mod_minus_2 = {
+        let mut m = Secp256r1FqParams::MODULUS;
+        // subtract 2 from m[0]
+        if m[0] >= 2 {
+            m[0] -= 2;
+        } else {
+            m[0] = m[0].wrapping_sub(2);
+            // borrow propagation
+            for i in 1..4 {
+                if m[i] > 0 { m[i] -= 1; break; }
+                m[i] = m[i].wrapping_sub(1);
+            }
+        }
+        R1Fq::from_limbs(m)
+    };
+    fq1 = fq1 + mod_minus_2;
+    fq1 = fq1 + R1Fq::from(2u64);
+    // fq1 and fq2 should now be equal since adding modulus wraps
+    let lhs = fq1 + fq1;
+    let rhs = fq2 + fq2;
+    assert_eq!(lhs, rhs, "addition regression: 2p overflow edge case");
+    let fq3 = R1Fq::zero() - fq1;
+    let fq4 = R1Fq::zero() - fq2;
+    assert_eq!(fq3, fq4, "subtraction regression: 2p overflow edge case");
+}
+
+// --- BN254 Fq endomorphism split edge case ---
+
+#[test]
+fn bn254_fq_split_endomorphism_edge_case() {
+    // k = 2^128 (data[2] = 1, rest zero)
+    let k = Fq::from_raw([0, 0, 1, 0]);
+    let (k1, k2) = k.split_into_endomorphism_scalars();
+
+    // k1 and k2 should fit in 128 bits
+    assert_eq!(k1.data[2], 0, "k1 upper limbs should be 0");
+    assert_eq!(k1.data[3], 0, "k1 upper limbs should be 0");
+    assert_eq!(k2.data[2], 0, "k2 upper limbs should be 0");
+    assert_eq!(k2.data[3], 0, "k2 upper limbs should be 0");
+
+    // Verify: k1 - k2*beta == k
+    let k1_mont = k1.to_montgomery_form();
+    let k2_mont = k2.to_montgomery_form();
+    let beta = Fq::cube_root_of_unity();
+    let result = (k1_mont - k2_mont * beta).from_montgomery_form();
+    assert_eq!(result, k, "endomorphism split edge case: k1 - k2*beta should equal k");
+}
+
+// =========================================================================
+// Missing group tests — ported from C++ g1.test.cpp / grumpkin.test.cpp
+// =========================================================================
+
+#[test]
+fn bn254_eq_normalized() {
+    let a = Element::<Bn254G1Params>::random_element();
+    let a_norm = a.normalize();
+    assert_eq!(a, a_norm, "a should equal a.normalize()");
+}
+
+#[test]
+fn bn254_eq_infinity() {
+    let inf1 = Element::<Bn254G1Params>::infinity();
+    let inf2 = Element::<Bn254G1Params>::infinity();
+    let a = Element::<Bn254G1Params>::random_element();
+    assert_eq!(inf1, inf2, "infinity == infinity");
+    assert_ne!(a, inf1, "point != infinity");
+}
+
+#[test]
+fn bn254_add_exception_infinity() {
+    let a = Element::<Bn254G1Params>::random_element();
+    let neg_a = -a;
+    let inf = Element::<Bn254G1Params>::infinity();
+
+    // a + (-a) = infinity
+    let result = a + neg_a;
+    assert!(result.is_point_at_infinity(), "a + (-a) should be infinity");
+    // inf + a = a
+    assert_eq!(inf + a, a, "inf + a should be a");
+    // a + inf = a
+    assert_eq!(a + inf, a, "a + inf should be a");
+}
+
+#[test]
+fn bn254_add_exception_dbl() {
+    let a = Element::<Bn254G1Params>::random_element();
+    let result = a + a;
+    let expected = a.dbl();
+    assert_eq!(result, expected, "a + a should equal a.dbl()");
+}
+
+#[test]
+fn bn254_add_dbl_consistency() {
+    let a = Element::<Bn254G1Params>::random_element();
+    // Compute 8P via doubling chain: 2(2(2P))
+    let d2 = a.dbl();
+    let d4 = d2.dbl();
+    let d8 = d4.dbl();
+    // Compute 8P via add chain: 4P + 4P
+    let d8_add = d4 + d4;
+    assert_eq!(d8, d8_add, "doubling chain 8P should match add chain");
+}
+
+#[test]
+fn bn254_add_dbl_consistency_repeated() {
+    let a = Element::<Bn254G1Params>::random_element();
+    let b = a.dbl(); // 2a
+    let c = b + a;   // 3a
+    let d = c + a;   // 4a
+    let e = d + a;   // 5a
+    let f = e + a;   // 6a
+    let g = f + a;   // 7a
+    let h = g + a;   // 8a
+    let b2 = a.dbl();           // 2a
+    let c2 = b2.dbl();          // 4a
+    let d2 = c2.dbl();          // 8a
+    let e2 = d2 - c2;           // 4a
+    let f2 = e2 + b2;           // 6a
+    let g2 = f2 - a;            // 5a
+    let h2 = g2 - a.dbl().dbl();// 1a
+    assert_eq!(b, b2, "2a mismatch");
+    assert_eq!(d, c2, "4a mismatch");
+    assert_eq!(h, d2, "8a mismatch");
+    assert_eq!(d, e2, "4a via sub mismatch");
+    assert_eq!(f, f2, "6a mismatch");
+    assert_eq!(e, g2, "5a mismatch");
+    assert_eq!(a, h2, "1a via sub mismatch");
+}
+
+#[test]
+fn bn254_mixed_add_exception_infinity() {
+    let a = Element::<Bn254G1Params>::random_element();
+    let a_aff = a.to_affine();
+    let neg_a_aff = (-a).to_affine();
+    let inf = Element::<Bn254G1Params>::infinity();
+
+    // a + (-a_affine) = infinity
+    let result = a + neg_a_aff;
+    assert!(result.is_point_at_infinity(), "a + (-a_affine) should be infinity");
+    // inf + a_affine = a (as projective)
+    let result2 = inf + a_aff;
+    assert_eq!(result2.to_affine(), a_aff, "inf + a_affine should be a");
+}
+
+#[test]
+fn bn254_mixed_add_exception_dbl() {
+    let a = Element::<Bn254G1Params>::random_element();
+    let a_aff = a.to_affine();
+    let result = a + a_aff;
+    let expected = a.dbl();
+    assert_eq!(result, expected, "a + a_affine should equal a.dbl()");
+}
+
+#[test]
+fn bn254_add_mixed_add_consistency_check() {
+    let a = Element::<Bn254G1Params>::random_element();
+    let b = Element::<Bn254G1Params>::random_element();
+    let b_aff = b.to_affine();
+    let via_proj = a + b;
+    let via_mixed = a + b_aff;
+    assert_eq!(via_proj, via_mixed, "projective add should match mixed add");
+}
+
+#[test]
+fn bn254_group_exponentiation_zero_and_one() {
+    let g = Element::<Bn254G1Params>::one();
+    let zero = Fr::zero();
+    let one_scalar = Fr::one();
+    let result_zero = g.mul(&zero);
+    let result_one = g.mul(&one_scalar);
+    assert!(result_zero.is_point_at_infinity(), "G*0 should be infinity");
+    assert_eq!(result_one, g, "G*1 should be G");
+}
+
+#[test]
+fn bn254_group_exponentiation_consistency_check() {
+    for _ in 0..10 {
+        let a = Fr::random_element();
+        let b = Fr::random_element();
+        let g = Element::<Bn254G1Params>::one();
+        let ga = g.mul(&a);
+        let gab = ga.mul(&b);
+        let ab = a * b;
+        let g_ab = g.mul(&ab);
+        assert_eq!(gab, g_ab, "(G*a)*b should equal G*(a*b)");
+    }
+}
+
+#[test]
+fn bn254_on_curve_random() {
+    for _ in 0..100 {
+        let p = Element::<Bn254G1Params>::random_element();
+        assert!(p.on_curve(), "random element should be on curve");
+    }
+}
+
+// --- Grumpkin group tests ---
+
+#[test]
+fn grumpkin_check_group_modulus() {
+    // -1*G + 2G = G
+    type GrumpkinFr = Field<Bn254FqParams>;
+    let g = Element::<GrumpkinG1Params>::one();
+    let minus_one = GrumpkinFr::one().negate();
+    let neg_g = g.mul(&minus_one);
+    let two_g = g.dbl();
+    let result = neg_g + two_g;
+    assert_eq!(result, g, "-1*G + 2G should equal G");
+}
+
+#[test]
+fn grumpkin_check_b() {
+    use crate::ecc::groups::curve_params::CurveParams;
+    type GrumpkinFq = Field<Bn254FrParams>;
+    let b = GrumpkinG1Params::coeff_b();
+    let neg_17 = GrumpkinFq::from(17u64).negate();
+    assert_eq!(b, neg_17, "Grumpkin coeff_b should be -17");
+}
+
+#[test]
+fn grumpkin_mul_with_endomorphism_matches_basic() {
+    type GrumpkinFr = Field<Bn254FqParams>;
+    let g = Element::<GrumpkinG1Params>::one();
+    for _ in 0..100 {
+        let x1 = g.mul_without_endomorphism(&GrumpkinFr::random_element());
+        let f1 = GrumpkinFr::random_element();
+        let r1 = x1.mul_without_endomorphism(&f1);
+        let r2 = x1.mul_with_endomorphism(&f1);
+        assert_eq!(r1, r2, "Grumpkin endomorphism mul should match basic mul");
+    }
+}
+
+// --- secp256k1 group tests ---
+
+#[test]
+fn secp256k1_on_curve_random() {
+    for _ in 0..100 {
+        let p = Element::<Secp256k1G1Params>::random_element();
+        assert!(p.on_curve(), "secp256k1 random element should be on curve");
+    }
+}
+
+#[test]
+fn secp256k1_add_dbl_consistency_repeated() {
+    let a = Element::<Secp256k1G1Params>::random_element();
+    let b = a.dbl();
+    let c = b + a;
+    let d = c + a;
+    let e = d + a;
+    let b2 = a.dbl();
+    let c2 = b2.dbl();
+    let d2 = c2 - b2;
+    assert_eq!(b, b2, "secp256k1 2a mismatch");
+    assert_eq!(d, c2, "secp256k1 4a mismatch");
+    assert_eq!(b, d2, "secp256k1 4a-2a mismatch");
+    // Chain longer: 5a via adds == dbl+add
+    let e2 = c2 + a;
+    assert_eq!(e, e2, "secp256k1 5a mismatch");
+}
+
+#[test]
+fn secp256k1_group_exponentiation_zero_and_one() {
+    let g = Element::<Secp256k1G1Params>::one();
+    let zero = Secp256k1Fr::zero();
+    let one_scalar = Secp256k1Fr::one();
+    let result_zero = g.mul(&zero);
+    let result_one = g.mul(&one_scalar);
+    assert!(result_zero.is_point_at_infinity(), "secp256k1 G*0 should be infinity");
+    assert_eq!(result_one, g, "secp256k1 G*1 should be G");
+}
+
+#[test]
+fn secp256k1_group_exponentiation_consistency_check() {
+    for _ in 0..10 {
+        let a = Secp256k1Fr::random_element();
+        let b = Secp256k1Fr::random_element();
+        let g = Element::<Secp256k1G1Params>::one();
+        let ga = g.mul(&a);
+        let gab = ga.mul(&b);
+        let ab = a * b;
+        let g_ab = g.mul(&ab);
+        assert_eq!(gab, g_ab, "secp256k1 (G*a)*b should equal G*(a*b)");
+    }
+}
+
+// --- secp256r1 group tests ---
+
+#[test]
+fn secp256r1_check_group_modulus() {
+    type R1Fr = Field<Secp256r1FrParams>;
+    let g = Element::<Secp256r1G1Params>::one();
+    let minus_one = R1Fr::one().negate();
+    let neg_g = g.mul(&minus_one);
+    let two_g = g.dbl();
+    let result = neg_g + two_g;
+    assert_eq!(result, g, "secp256r1 -1*G + 2G should equal G");
+}
+
+#[test]
+fn secp256r1_on_curve_random() {
+    for _ in 0..100 {
+        let p = Element::<Secp256r1G1Params>::random_element();
+        assert!(p.on_curve(), "secp256r1 random element should be on curve");
+    }
+}
+
+#[test]
+fn secp256r1_add_dbl_consistency_chain() {
+    let a = Element::<Secp256r1G1Params>::random_element();
+    let d2 = a.dbl();
+    let d4 = d2.dbl();
+    let d8 = d4.dbl();
+    let d8_add = d4 + d4;
+    assert_eq!(d8, d8_add, "secp256r1 doubling chain 8P should match add chain");
+}
+
+#[test]
+fn secp256r1_add_dbl_consistency_repeated() {
+    let a = Element::<Secp256r1G1Params>::random_element();
+    let b = a.dbl();
+    let c = b + a;
+    let d = c + a;
+    let e = d + a;
+    let b2 = a.dbl();
+    let c2 = b2.dbl();
+    let e2 = c2 + a;
+    assert_eq!(b, b2, "secp256r1 2a mismatch");
+    assert_eq!(d, c2, "secp256r1 4a mismatch");
+    assert_eq!(e, e2, "secp256r1 5a mismatch");
+}
+
+#[test]
+fn secp256r1_group_exponentiation_zero_and_one() {
+    type R1Fr = Field<Secp256r1FrParams>;
+    let g = Element::<Secp256r1G1Params>::one();
+    let zero = R1Fr::zero();
+    let one_scalar = R1Fr::one();
+    let result_zero = g.mul(&zero);
+    let result_one = g.mul(&one_scalar);
+    assert!(result_zero.is_point_at_infinity(), "secp256r1 G*0 should be infinity");
+    assert_eq!(result_one, g, "secp256r1 G*1 should be G");
+}
+
+#[test]
+fn secp256r1_group_exponentiation_consistency_check() {
+    type R1Fr = Field<Secp256r1FrParams>;
+    for _ in 0..10 {
+        let a = R1Fr::random_element();
+        let b = R1Fr::random_element();
+        let g = Element::<Secp256r1G1Params>::one();
+        let ga = g.mul(&a);
+        let gab = ga.mul(&b);
+        let ab = a * b;
+        let g_ab = g.mul(&ab);
+        assert_eq!(gab, g_ab, "secp256r1 (G*a)*b should equal G*(a*b)");
+    }
+}
+
+// =========================================================================
+// WNAF tests — ported from C++ wnaf.test.cpp
+// =========================================================================
+
+/// Helper to recover a scalar from WNAF encoding (matches C++ recover_fixed_wnaf)
+fn recover_wnaf_scalar(table: &[u64], skew: bool, num_entries: usize, wnaf_bits: usize) -> [u64; 2] {
+    let mut recovered: i128 = 0;
+    for i in 0..num_entries {
+        let entry = table[i];
+        let val = (entry & 0x0fffffff) as i128;
+        let sign = ((entry >> 31) & 1) != 0;
+        let actual = (2 * val + 1) * if sign { -1 } else { 1 };
+        recovered = recovered * (1i128 << wnaf_bits) + actual;
+    }
+    if skew {
+        recovered -= 1;
+    }
+    [recovered as u64, (recovered >> 64) as u64]
+}
+
+#[test]
+fn wnaf_zero() {
+    use crate::ecc::groups::wnaf;
+    let buffer: [u64; 2] = [0, 0];
+    let wnaf_bits = 5;
+    let wnaf_entries = (wnaf::SCALAR_BITS + wnaf_bits - 1) / wnaf_bits;
+    let mut table = vec![0u64; wnaf_entries + 1];
+    let mut skew = false;
+
+    wnaf::fixed_wnaf(&buffer, &mut table, &mut skew, 0, 1, wnaf_bits);
+    let recovered = recover_wnaf_scalar(&table, skew, wnaf_entries, wnaf_bits);
+    assert_eq!(recovered[0], 0, "WNAF of zero: lo should be 0");
+    assert_eq!(recovered[1], 0, "WNAF of zero: hi should be 0");
+}
+
+#[test]
+fn wnaf_fixed_random() {
+    use crate::ecc::groups::wnaf;
+    let r = Fr::random_element();
+    let raw = r.from_montgomery_form();
+    let buffer: [u64; 2] = [raw.data[0], raw.data[1] & 0x7fffffffffffffff];
+    let wnaf_bits = 5;
+    let wnaf_entries = (wnaf::SCALAR_BITS + wnaf_bits - 1) / wnaf_bits;
+    let mut table = vec![0u64; wnaf_entries + 1];
+    let mut skew = false;
+
+    wnaf::fixed_wnaf(&buffer, &mut table, &mut skew, 0, 1, wnaf_bits);
+    let recovered = recover_wnaf_scalar(&table, skew, wnaf_entries, wnaf_bits);
+    assert_eq!(recovered[0], buffer[0], "WNAF random: lo mismatch");
+    assert_eq!(recovered[1], buffer[1], "WNAF random: hi mismatch");
+}
+
+#[test]
+fn wnaf_fixed_simple_lo() {
+    use crate::ecc::groups::wnaf;
+    let buffer: [u64; 2] = [1, 0];
+    let wnaf_bits = 5;
+    let wnaf_entries = (wnaf::SCALAR_BITS + wnaf_bits - 1) / wnaf_bits;
+    let mut table = vec![0u64; wnaf_entries + 1];
+    let mut skew = false;
+
+    wnaf::fixed_wnaf(&buffer, &mut table, &mut skew, 0, 1, wnaf_bits);
+    let recovered = recover_wnaf_scalar(&table, skew, wnaf_entries, wnaf_bits);
+    assert_eq!(recovered[0], 1, "WNAF simple lo: lo should be 1");
+    assert_eq!(recovered[1], 0, "WNAF simple lo: hi should be 0");
+}
+
+#[test]
+fn wnaf_fixed_simple_hi() {
+    use crate::ecc::groups::wnaf;
+    let buffer: [u64; 2] = [0, 1];
+    let wnaf_bits = 5;
+    let wnaf_entries = (wnaf::SCALAR_BITS + wnaf_bits - 1) / wnaf_bits;
+    let mut table = vec![0u64; wnaf_entries + 1];
+    let mut skew = false;
+
+    wnaf::fixed_wnaf(&buffer, &mut table, &mut skew, 0, 1, wnaf_bits);
+    let recovered = recover_wnaf_scalar(&table, skew, wnaf_entries, wnaf_bits);
+    assert_eq!(recovered[0], 0, "WNAF simple hi: lo should be 0");
+    assert_eq!(recovered[1], 1, "WNAF simple hi: hi should be 1");
 }

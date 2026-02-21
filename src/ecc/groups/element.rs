@@ -68,6 +68,12 @@ impl<C: CurveParams> Element<C> {
         Self::new(C::generator_x(), C::generator_y(), BaseField::<C>::one())
     }
 
+    /// A random curve point, obtained by multiplying the generator by a random scalar.
+    pub fn random_element() -> Self {
+        let scalar = ScalarField::<C>::random_element();
+        Self::one().mul_without_endomorphism(&scalar)
+    }
+
     /// The point at infinity.
     #[inline]
     pub fn infinity() -> Self {

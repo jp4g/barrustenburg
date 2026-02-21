@@ -142,4 +142,49 @@ mod tests {
         assert_eq!(r1, r2, "same inputs should produce same field element");
         assert!(!r1.is_zero(), "result should not be zero");
     }
+
+    /// RFC 4231 Test Case 4: key = 0x01..0x19 (25 bytes), data = 0xcd * 50
+    #[test]
+    fn hmac_sha256_rfc4231_test_case_4() {
+        let key: Vec<u8> = (0x01..=0x19).collect();
+        let data = vec![0xcdu8; 50];
+        let result = hmac::<Sha256Hasher>(&data, &key);
+        let expected: [u8; 32] = [
+            0x82, 0x55, 0x8a, 0x38, 0x9a, 0x44, 0x3c, 0x0e,
+            0xa4, 0xcc, 0x81, 0x98, 0x99, 0xf2, 0x08, 0x3a,
+            0x85, 0xf0, 0xfa, 0xa3, 0xe5, 0x78, 0xf8, 0x07,
+            0x7a, 0x2e, 0x3f, 0xf4, 0x67, 0x29, 0x66, 0x5b,
+        ];
+        assert_eq!(result.as_slice(), &expected, "RFC 4231 case 4");
+    }
+
+    /// RFC 4231 Test Case 5: key = 0xaa * 131, data = "Test Using Larger Than Block-Size Key - Hash Key First"
+    #[test]
+    fn hmac_sha256_rfc4231_test_case_5() {
+        let key = vec![0xaau8; 131];
+        let data = b"Test Using Larger Than Block-Size Key - Hash Key First";
+        let result = hmac::<Sha256Hasher>(data, &key);
+        let expected: [u8; 32] = [
+            0x60, 0xe4, 0x31, 0x59, 0x1e, 0xe0, 0xb6, 0x7f,
+            0x0d, 0x8a, 0x26, 0xaa, 0xcb, 0xf5, 0xb7, 0x7f,
+            0x8e, 0x0b, 0xc6, 0x21, 0x37, 0x28, 0xc5, 0x14,
+            0x05, 0x46, 0x04, 0x0f, 0x0e, 0xe3, 0x7f, 0x54,
+        ];
+        assert_eq!(result.as_slice(), &expected, "RFC 4231 case 5");
+    }
+
+    /// RFC 4231 Test Case 6: key = 0xaa * 131, data = long string about block-size
+    #[test]
+    fn hmac_sha256_rfc4231_test_case_6() {
+        let key = vec![0xaau8; 131];
+        let data = b"This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm.";
+        let result = hmac::<Sha256Hasher>(data, &key);
+        let expected: [u8; 32] = [
+            0x9b, 0x09, 0xff, 0xa7, 0x1b, 0x94, 0x2f, 0xcb,
+            0x27, 0x63, 0x5f, 0xbc, 0xd5, 0xb0, 0xe9, 0x44,
+            0xbf, 0xdc, 0x63, 0x64, 0x4f, 0x07, 0x13, 0x93,
+            0x8a, 0x7f, 0x51, 0x53, 0x5c, 0x3a, 0x35, 0xe2,
+        ];
+        assert_eq!(result.as_slice(), &expected, "RFC 4231 case 6");
+    }
 }

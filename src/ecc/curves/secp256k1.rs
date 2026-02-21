@@ -129,7 +129,7 @@ impl CurveParams for Secp256k1G1Params {
         0x483ADA7726A3C465,
     ];
 
-    const USE_ENDOMORPHISM: bool = true;
+    const USE_ENDOMORPHISM: bool = false;
 
     /// Convert from standard form at runtime, matching C++.
     fn generator_x() -> Secp256k1Fq {

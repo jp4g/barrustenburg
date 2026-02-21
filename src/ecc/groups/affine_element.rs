@@ -155,6 +155,12 @@ impl<C: CurveParams> PartialEq for AffineElement<C> {
 
 impl<C: CurveParams> Eq for AffineElement<C> {}
 
+impl<C: CurveParams> From<crate::ecc::groups::element::Element<C>> for AffineElement<C> {
+    fn from(e: crate::ecc::groups::element::Element<C>) -> Self {
+        e.to_affine()
+    }
+}
+
 impl<C: CurveParams> std::ops::Neg for AffineElement<C> {
     type Output = Self;
     #[inline]

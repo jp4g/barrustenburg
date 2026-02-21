@@ -46,6 +46,17 @@ impl FieldParams for Bn254FqParams {
         0x180a96573d3d9f8,  0xf8b21270ddbb927,  0x1d9598e8a7e39857, 0x2ba010aa41eb7786,
     ];
     const MODULUS_IS_BIG: bool = false; // 0x3064... < 0x4000...
+
+    // GLV endomorphism constants for BN254 Fq (Grumpkin's scalar field)
+    // From C++ fq.hpp:82-90 — different from Fr's constants
+    const ENDO_G1_LO: u64 = 0x7a7bd9d4391eb18d;
+    const ENDO_G1_MID: u64 = 0x4ccef014a773d2cf;
+    const ENDO_G1_HI: u64 = 0x0000000000000002;
+    const ENDO_G2_LO: u64 = 0xd91d232ec7e0b3d2;
+    const ENDO_G2_MID: u64 = 0x0000000000000002;
+    const ENDO_MINUS_B1_LO: u64 = 0x8211bbeb7d4f1129;
+    const ENDO_MINUS_B1_MID: u64 = 0x6f4d8248eeb859fc;
+    const ENDO_B2_LO: u64 = 0x89d3256894d213e2;
 }
 
 pub type Fq = Field<Bn254FqParams>;

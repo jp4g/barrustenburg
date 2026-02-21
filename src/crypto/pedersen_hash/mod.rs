@@ -111,4 +111,29 @@ mod tests {
 
         assert_eq!(result, expected, "hash([1, 1], offset=5) mismatch");
     }
+
+    #[test]
+    fn test_derive_length_generator() {
+        use crate::crypto::generators::precomputed::LENGTH_GENERATOR;
+
+        let generator = *LENGTH_GENERATOR;
+        // C++ DeriveLengthGenerator expected coordinates
+        // x = 0x2df8b940e5890e4e1377e05373fae69a1d754f6935e6a780b666947431f2cdcd
+        let expected_x = GrumpkinFq::from_limbs([
+            0xb666947431f2cdcd,
+            0x1d754f6935e6a780,
+            0x1377e05373fae69a,
+            0x2df8b940e5890e4e,
+        ]);
+        // y = 0x2ecd88d15967bc53b885912e0d16866154acb6aac2d3f85e27ca7eefb2c19083
+        let expected_y = GrumpkinFq::from_limbs([
+            0x27ca7eefb2c19083,
+            0x54acb6aac2d3f85e,
+            0xb885912e0d168661,
+            0x2ecd88d15967bc53,
+        ]);
+
+        assert_eq!(generator.x, expected_x, "LENGTH_GENERATOR x mismatch");
+        assert_eq!(generator.y, expected_y, "LENGTH_GENERATOR y mismatch");
+    }
 }
