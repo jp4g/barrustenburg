@@ -1,0 +1,15 @@
+[package]
+name = "barrustenburg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tiny-keccak = { version = "2.0", features = ["keccak"] }
+
+[lib]
+name = "barrustenburg"
+path = "src/lib.rs"
+
+[[bin]]
+name = "barrustenburg"
+path = "src/main.rs"
