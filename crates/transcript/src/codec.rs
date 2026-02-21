@@ -83,6 +83,23 @@ impl FieldSerializable for Fr {
     }
 }
 
+// --- Fixed-size arrays of Fr ---
+
+impl<const N: usize> FieldSerializable for [Fr; N] {
+    const NUM_FR: usize = N;
+
+    fn serialize_to_frs(&self) -> Vec<Fr> {
+        self.to_vec()
+    }
+
+    fn deserialize_from_frs(frs: &[Fr]) -> Self {
+        assert_eq!(frs.len(), N);
+        let mut arr = [Fr::zero(); N];
+        arr.copy_from_slice(frs);
+        arr
+    }
+}
+
 // --- Grumpkin Fr = BN254 Fq (2 field elements) ---
 //
 // Splits a Grumpkin Fr (BN254 Fq) into two BN254 Fr elements:

@@ -120,4 +120,21 @@ impl<P: FieldParams> SharedShiftedVirtualZeroesArray<P> {
     pub fn end_index(&self) -> usize {
         self.end
     }
+
+    /// Shrink the end index to a new value, effectively reducing the real data range.
+    ///
+    /// This does not deallocate memory; it just adjusts the logical end boundary.
+    /// Any reads beyond the new end will return zero (virtual zone).
+    ///
+    /// Port of C++ `SharedShiftedVirtualZeroesArray::shrink_end_index`.
+    pub fn shrink_end_index(&mut self, new_end: usize) {
+        assert!(
+            new_end >= self.start && new_end <= self.end,
+            "shrink_end_index: new_end ({}) must be in [{}, {}]",
+            new_end,
+            self.start,
+            self.end,
+        );
+        self.end = new_end;
+    }
 }
