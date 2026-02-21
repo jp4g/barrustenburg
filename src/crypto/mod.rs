@@ -7,3 +7,7 @@ pub mod blake2s;
 pub mod sha256;
 pub mod aes128;
 pub mod blake3s;
+pub mod hashers;
+pub mod hmac;
+pub mod ecdsa;
+pub mod schnorr;

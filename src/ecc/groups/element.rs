@@ -470,6 +470,22 @@ impl<C: CurveParams> Element<C> {
         let scalar = ScalarField::<C>::from_limbs(*raw_scalar);
         self.mul_without_endomorphism(&scalar)
     }
+
+    /// Compute a*self + b*other (double scalar multiplication).
+    ///
+    /// Used by ECDSA verify and Schnorr verify. Naive approach using two
+    /// separate scalar multiplications and addition. (Shamir's trick / interleaved
+    /// NAF optimization can be added later when MSM is ported.)
+    pub fn double_scalar_mul(
+        &self,
+        a: &ScalarField<C>,
+        other: &Self,
+        b: &ScalarField<C>,
+    ) -> Self {
+        let term1 = self.mul_without_endomorphism(a);
+        let term2 = other.mul_without_endomorphism(b);
+        term1 + term2
+    }
 }
 
 // ---------------------------------------------------------------------------

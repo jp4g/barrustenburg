@@ -739,3 +739,100 @@ fn secp256r1_scalar_mul_small() {
     let five_g_expected = g.dbl().dbl() + g;
     assert_eq!(five_g, five_g_expected);
 }
+
+// =========================================================================
+// Field byte serialization tests
+// =========================================================================
+
+#[test]
+fn field_to_be_bytes_roundtrip() {
+    let val = Fq::from(42u64);
+    let bytes = val.to_be_bytes();
+    let recovered = Fq::from_be_bytes(&bytes);
+    assert_eq!(val, recovered, "to_be_bytes / from_be_bytes roundtrip failed");
+}
+
+#[test]
+fn field_to_be_bytes_known_value() {
+    let one = Fq::from(1u64);
+    let bytes = one.to_be_bytes();
+    // 1 in big-endian 32 bytes: all zeros except last byte = 1
+    let mut expected = [0u8; 32];
+    expected[31] = 1;
+    assert_eq!(bytes, expected, "to_be_bytes(1) should be 0x...01");
+}
+
+#[test]
+fn field_from_be_bytes_larger_than_modulus() {
+    // All 0xFF bytes = 2^256 - 1, should reduce mod p
+    let bytes = [0xFFu8; 32];
+    let val = Fq::from_be_bytes(&bytes);
+    // Should be equivalent to (2^256 - 1) mod p
+    let max_limbs = [0xFFFFFFFFFFFFFFFFu64; 4];
+    let expected = Fq::from_limbs(max_limbs);
+    assert_eq!(val, expected, "from_be_bytes should reduce values >= modulus");
+}
+
+#[test]
+fn field_to_be_bytes_roundtrip_fr() {
+    let val = Fr::from_limbs([0x123456789ABCDEF0, 0xFEDCBA9876543210, 0x1111111111111111, 0x0ABCDEF012345678]);
+    let bytes = val.to_be_bytes();
+    let recovered = Fr::from_be_bytes(&bytes);
+    assert_eq!(val, recovered, "Fr roundtrip failed");
+}
+
+// =========================================================================
+// Field::get_bit tests
+// =========================================================================
+
+#[test]
+fn field_get_bit() {
+    let val = Fq::from(5u64); // binary: 101
+    assert!(val.get_bit(0), "bit 0 should be 1");
+    assert!(!val.get_bit(1), "bit 1 should be 0");
+    assert!(val.get_bit(2), "bit 2 should be 1");
+    assert!(!val.get_bit(3), "bit 3 should be 0");
+}
+
+// =========================================================================
+// Field::random_element tests
+// =========================================================================
+
+#[test]
+fn field_random_element_not_zero() {
+    let r = Fr::random_element();
+    assert!(!r.is_zero(), "random element should not be zero (probabilistically)");
+}
+
+#[test]
+fn field_random_element_different_values() {
+    let r1 = Fr::random_element();
+    let r2 = Fr::random_element();
+    assert_ne!(r1, r2, "two random elements should differ (probabilistically)");
+}
+
+// =========================================================================
+// Element::double_scalar_mul tests
+// =========================================================================
+
+#[test]
+fn element_double_scalar_mul_bn254() {
+    let g = Element::<Bn254G1Params>::one();
+    let a = Fr::from(3u64);
+    let b = Fr::from(5u64);
+    let two_g = g.dbl();
+    // Compute 3*G + 5*2G = 3G + 10G = 13G
+    let result = g.double_scalar_mul(&a, &two_g, &b);
+    let expected = g.scalar_mul(&[13, 0, 0, 0]);
+    assert_eq!(result, expected, "3*G + 5*2G should equal 13*G");
+}
+
+#[test]
+fn element_double_scalar_mul_identity() {
+    let g = Element::<Bn254G1Params>::one();
+    let zero = Fr::zero();
+    let one_scalar = Fr::one();
+    // 1*G + 0*G = G
+    let result = g.double_scalar_mul(&one_scalar, &g, &zero);
+    assert_eq!(result, g, "1*G + 0*G should equal G");
+}

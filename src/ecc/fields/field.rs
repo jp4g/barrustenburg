@@ -907,6 +907,64 @@ impl<P: FieldParams> Field<P> {
         Self::from_raw(P::CUBE_ROOT)
     }
 
+    /// Serialize to 32 big-endian bytes (from Montgomery form).
+    ///
+    /// Converts from Montgomery form to standard integer representation,
+    /// then writes data[3] (MSB) first as big-endian u64s.
+    pub fn to_be_bytes(&self) -> [u8; 32] {
+        let reduced = self.from_montgomery_form();
+        let mut bytes = [0u8; 32];
+        bytes[0..8].copy_from_slice(&reduced.data[3].to_be_bytes());
+        bytes[8..16].copy_from_slice(&reduced.data[2].to_be_bytes());
+        bytes[16..24].copy_from_slice(&reduced.data[1].to_be_bytes());
+        bytes[24..32].copy_from_slice(&reduced.data[0].to_be_bytes());
+        bytes
+    }
+
+    /// Deserialize from 32 big-endian bytes (into Montgomery form).
+    ///
+    /// Reads 4 big-endian u64s, constructs limbs, and converts to Montgomery form.
+    /// Performs modular reduction if value >= modulus.
+    pub fn from_be_bytes(bytes: &[u8; 32]) -> Self {
+        let data3 = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let data2 = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
+        let data1 = u64::from_be_bytes(bytes[16..24].try_into().unwrap());
+        let data0 = u64::from_be_bytes(bytes[24..32].try_into().unwrap());
+        Self::from_limbs([data0, data1, data2, data3])
+    }
+
+    /// Extract bit at position `idx` from the reduced (non-Montgomery) form.
+    pub fn get_bit(&self, idx: usize) -> bool {
+        let reduced = self.from_montgomery_form();
+        let limb_idx = idx / 64;
+        let bit_idx = idx % 64;
+        if limb_idx >= 4 {
+            return false;
+        }
+        (reduced.data[limb_idx] >> bit_idx) & 1 == 1
+    }
+
+    /// Generate a uniformly random field element.
+    ///
+    /// Generates 512 random bits and reduces mod p for uniform distribution.
+    pub fn random_element() -> Self {
+        use rand::Rng;
+        let mut rng = rand::rng();
+        let lo = [
+            rng.random::<u64>(),
+            rng.random::<u64>(),
+            rng.random::<u64>(),
+            rng.random::<u64>(),
+        ];
+        let hi = [
+            rng.random::<u64>(),
+            rng.random::<u64>(),
+            rng.random::<u64>(),
+            rng.random::<u64>(),
+        ];
+        Self::from_u512(lo, hi)
+    }
+
     /// Reduce a 512-bit value (lo || hi) modulo the field modulus.
     ///
     /// Used by hash-to-curve to map a 512-bit hash output into a field element,
