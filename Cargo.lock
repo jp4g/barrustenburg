@@ -110,6 +110,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bbrs-sumcheck"
+version = "0.1.0"
+dependencies = [
+ "bbrs-ecc",
+ "bbrs-flavor",
+ "bbrs-polynomials",
+ "bbrs-relations",
+ "bbrs-transcript",
+]
+
+[[package]]
 name = "bbrs-transcript"
 version = "0.1.0"
 dependencies = [

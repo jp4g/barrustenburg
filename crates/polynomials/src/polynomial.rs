@@ -120,6 +120,16 @@ impl<P: FieldParams> Polynomial<P> {
         self.data().iter().all(|c| c.is_zero())
     }
 
+    /// Shrink the end index, reducing the logical size of the polynomial.
+    ///
+    /// Reads beyond the new end will return zero. This does not deallocate memory.
+    /// Used during partial evaluation to reduce the effective polynomial size each round.
+    ///
+    /// Port of C++ `Polynomial::shrink_end_index`.
+    pub fn shrink_end_index(&mut self, new_end: usize) {
+        self.coefficients.shrink_end_index(new_end);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.size() == 0
     }
