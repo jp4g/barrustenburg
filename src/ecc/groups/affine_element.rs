@@ -125,6 +125,19 @@ impl<C: CurveParams> AffineElement<C> {
         }
     }
 
+    /// Serialize to 64-byte buffer (x || y, big-endian).
+    /// Matches C++ `write(buf, affine_element)` which uses x-first (legacy) order.
+    /// Point at infinity is encoded as 64 bytes of 0xFF.
+    pub fn to_buffer(&self) -> [u8; 64] {
+        if self.is_point_at_infinity() {
+            return [0xFF; 64];
+        }
+        let mut buf = [0u8; 64];
+        buf[..32].copy_from_slice(&self.x.to_be_bytes());
+        buf[32..].copy_from_slice(&self.y.to_be_bytes());
+        buf
+    }
+
     /// Check if the point lies on the curve: y^2 == x^3 + a*x + b.
     pub fn on_curve(&self) -> bool {
         if self.is_point_at_infinity() {

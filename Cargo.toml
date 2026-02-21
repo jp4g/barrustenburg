@@ -13,6 +13,9 @@ sha2 = { version = "0.10", features = ["compress"] }
 aes = "0.8"
 cbc = "0.1"
 
+[dev-dependencies]
+paste = "1"
+
 [lib]
 name = "barrustenburg"
 path = "src/lib.rs"
