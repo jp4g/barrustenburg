@@ -1,14 +1,20 @@
 //! Tests for commitment schemes.
 
-use bbrs_ecc::curves::bn254::{Bn254G1Params, Fr, G1Affine as Bn254G1Affine, G2AffineElement};
+use bbrs_ecc::curves::bn254::{
+    Bn254G1Params, Fq12, Fr, G1Affine as Bn254G1Affine, G2AffineElement, G2Element,
+};
+use bbrs_ecc::curves::bn254_pairing::reduced_ate_pairing;
 use bbrs_ecc::groups::element::Element;
 use bbrs_ecc::scalar_multiplication::naive_msm;
 use bbrs_polynomials::polynomial::Polynomial;
 
 use crate::batch_mul::batch_mul_native;
-use crate::claim::{OpeningClaim, OpeningPair};
+use crate::claim::{OpeningClaim, OpeningPair, ProverOpeningClaim};
 use crate::commitment_key::CommitmentKey;
+use crate::kzg::KZG;
 use crate::verification_key::Bn254VerifierCommitmentKey;
+
+use bbrs_transcript::NativeTranscript;
 
 /// Generate n random BN254 G1 points for testing.
 fn random_bn254_points(n: usize) -> Vec<Bn254G1Affine> {
@@ -174,4 +180,151 @@ fn verifier_commitment_key_pairing_check() {
         vkey.pairing_check(&p0, &p1),
         "Valid pairing check must pass: e(tau*G1, G2) * e(-G1, tau*G2) == 1"
     );
+}
+
+// ── KZG tests ────────────────────────────────────────────────────────────────
+
+const KZG_N: usize = 16;
+
+/// Generate a powers-of-tau SRS for testing KZG.
+///
+/// Returns (G1 SRS points, G2_x = tau * G2_gen).
+fn create_kzg_test_srs(n: usize) -> (Vec<Bn254G1Affine>, G2AffineElement) {
+    let tau = Fr::random_element();
+
+    // G1 SRS: [G, tau*G, tau^2*G, ..., tau^(n-1)*G]
+    let g1 = Element::<Bn254G1Params>::one();
+    let mut points = Vec::with_capacity(n);
+    let mut tau_power = Fr::one();
+    for _ in 0..n {
+        points.push(g1.mul(&tau_power).to_affine());
+        tau_power = tau_power * tau;
+    }
+
+    // G2 SRS: tau * G2_gen
+    let g2 = G2Element::from_affine(&G2AffineElement::generator());
+    let g2_x = g2.mul_scalar(&tau).to_affine();
+
+    (points, g2_x)
+}
+
+/// Direct pairing check: e(P0, [1]_2) * e(P1, [x]_2) == 1_T.
+///
+/// Bypasses the global CRS to avoid OnceLock contention in tests.
+fn direct_pairing_check(
+    p0: &Bn254G1Affine,
+    p1: &Bn254G1Affine,
+    g2_x: &G2AffineElement,
+) -> bool {
+    let e0 = reduced_ate_pairing(p0, &G2AffineElement::generator());
+    let e1 = reduced_ate_pairing(p1, g2_x);
+    (e0 * e1) == Fq12::one()
+}
+
+/// Prove and verify a KZG opening claim.
+fn kzg_prove_and_verify(
+    ck: &CommitmentKey<Bn254G1Params>,
+    g2_x: &G2AffineElement,
+    challenge: Fr,
+    evaluation: Fr,
+    witness: &Polynomial<bbrs_ecc::curves::bn254::Bn254FrParams>,
+) {
+    let commitment = ck.commit(witness);
+    let opening_claim = OpeningClaim::<Bn254G1Params> {
+        opening_pair: OpeningPair {
+            challenge,
+            evaluation,
+        },
+        commitment,
+    };
+
+    let mut prover_transcript = NativeTranscript::prover_init_empty();
+
+    KZG::compute_opening_proof(
+        ck,
+        ProverOpeningClaim::<Bn254G1Params> {
+            polynomial: witness.clone(),
+            opening_pair: OpeningPair {
+                challenge,
+                evaluation,
+            },
+            gemini_fold: false,
+        },
+        &mut prover_transcript,
+    );
+
+    let mut verifier_transcript =
+        NativeTranscript::verifier_init_empty(&mut prover_transcript);
+    let pairing_points = KZG::reduce_verify(&opening_claim, &mut verifier_transcript);
+
+    assert!(
+        direct_pairing_check(&pairing_points.p0, &pairing_points.p1, g2_x),
+        "KZG pairing check failed"
+    );
+}
+
+#[test]
+fn kzg_single() {
+    let (srs_points, g2_x) = create_kzg_test_srs(KZG_N);
+    let ck = CommitmentKey::<Bn254G1Params>::from_points(srs_points);
+
+    let witness = Polynomial::random(KZG_N, KZG_N, 0);
+    let challenge = Fr::random_element();
+    let evaluation = witness.evaluate(&challenge);
+
+    kzg_prove_and_verify(&ck, &g2_x, challenge, evaluation, &witness);
+}
+
+#[test]
+fn kzg_zero_evaluation() {
+    let (srs_points, g2_x) = create_kzg_test_srs(KZG_N);
+    let ck = CommitmentKey::<Bn254G1Params>::from_points(srs_points);
+
+    let mut witness = Polynomial::random(KZG_N, KZG_N, 0);
+    let challenge = Fr::random_element();
+    let evaluation = witness.evaluate(&challenge);
+
+    // Modify witness to achieve zero evaluation: p(r) - p(r) = 0
+    *witness.at_mut(0) = witness.get(0) - evaluation;
+
+    kzg_prove_and_verify(&ck, &g2_x, challenge, Fr::zero(), &witness);
+}
+
+#[test]
+fn kzg_zero_polynomial() {
+    let poly_size = 10;
+    let (srs_points, g2_x) = create_kzg_test_srs(KZG_N);
+    let ck = CommitmentKey::<Bn254G1Params>::from_points(srs_points);
+
+    let zero = Polynomial::new(poly_size, KZG_N, 0);
+    assert!(zero.is_zero());
+
+    let challenge = Fr::random_element();
+    let evaluation = zero.evaluate(&challenge);
+
+    kzg_prove_and_verify(&ck, &g2_x, challenge, evaluation, &zero);
+}
+
+#[test]
+fn kzg_constant_polynomial() {
+    let (srs_points, g2_x) = create_kzg_test_srs(KZG_N);
+    let ck = CommitmentKey::<Bn254G1Params>::from_points(srs_points);
+
+    let constant = Polynomial::random(1, KZG_N, 0);
+    let challenge = Fr::random_element();
+    let evaluation = constant.evaluate(&challenge);
+
+    kzg_prove_and_verify(&ck, &g2_x, challenge, evaluation, &constant);
+}
+
+#[test]
+fn kzg_empty_polynomial() {
+    let (srs_points, g2_x) = create_kzg_test_srs(KZG_N);
+    let ck = CommitmentKey::<Bn254G1Params>::from_points(srs_points);
+
+    let empty = Polynomial::new(0, 0, 0);
+    let challenge = Fr::random_element();
+    let evaluation = empty.evaluate(&challenge);
+
+    kzg_prove_and_verify(&ck, &g2_x, challenge, evaluation, &empty);
 }
