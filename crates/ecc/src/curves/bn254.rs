@@ -370,6 +370,110 @@ impl G2Element {
     pub fn is_point_at_infinity(&self) -> bool {
         self.x.c0.is_msb_set()
     }
+
+    /// Jacobian point doubling over Fq2. BN254 G2 has a=0.
+    pub fn dbl(&self) -> Self {
+        if self.is_point_at_infinity() {
+            return *self;
+        }
+        let t0 = self.x.sqr();        // x^2
+        let t1 = self.y.sqr();        // y^2
+        let t2 = t1.sqr();            // y^4
+        let t1 = (t1 + self.x).sqr(); // (y^2 + x)^2
+        let t3 = t0 + t2;             // x^2 + y^4
+        let t1 = t1 - t3;             // (y^2+x)^2 - x^2 - y^4
+        let s = t1 + t1;              // 4*x*y^2
+        let mut m = t0 + t0;          // 2*x^2
+        m = m + t0;                   // 3*x^2 (a=0, no extra term)
+        let new_z = (self.z + self.z) * self.y;
+        let two_s = s + s;
+        let new_x = m.sqr() - two_s;
+        let t2 = t2 + t2;
+        let t2 = t2 + t2;
+        let t2 = t2 + t2;             // 8*y^4
+        let new_y = m * (s - new_x) - t2;
+        Self::new(new_x, new_y, new_z)
+    }
+
+    /// Jacobian addition over Fq2 (projective + projective).
+    pub fn add_assign_element(&mut self, other: &Self) {
+        let p1_zero = self.is_point_at_infinity();
+        let p2_zero = other.is_point_at_infinity();
+        if p1_zero || p2_zero {
+            if p1_zero && !p2_zero {
+                *self = *other;
+            }
+            return;
+        }
+        let z1z1 = self.z.sqr();
+        let z2z2 = other.z.sqr();
+        let mut s2 = z1z1 * self.z;
+        let u2 = z1z1 * other.x;
+        s2 = s2 * other.y;
+        let u1 = z2z2 * self.x;
+        let mut s1 = z2z2 * other.z;
+        s1 = s1 * self.y;
+        let f = s2 - s1;
+        let h = u2 - u1;
+        if h == Fq2::zero() {
+            if f == Fq2::zero() {
+                *self = self.dbl();
+            } else {
+                *self = Self::infinity();
+            }
+            return;
+        }
+        let ff = f + f;
+        let i = (h + h).sqr();
+        let j = h * i;
+        let r = ff;
+        let v = u1 * i;
+        self.x = r.sqr() - j - v - v;
+        let s1_j = s1 * j;
+        self.y = r * (v - self.x) - s1_j - s1_j;
+        self.z = ((self.z + other.z).sqr() - z1z1 - z2z2) * h;
+    }
+
+    /// Convert to affine coordinates via z-inverse over Fq2.
+    pub fn to_affine(&self) -> G2AffineElement {
+        if self.is_point_at_infinity() {
+            return G2AffineElement::infinity();
+        }
+        let z_inv = self.z.invert();
+        let zz_inv = z_inv.sqr();
+        let zzz_inv = zz_inv * z_inv;
+        G2AffineElement::new(self.x * zz_inv, self.y * zzz_inv)
+    }
+
+    /// Scalar multiplication using double-and-add (no endomorphism).
+    pub fn mul_scalar(&self, scalar: &Fr) -> Self {
+        let converted = scalar.from_montgomery_form();
+        if converted.data[0] == 0
+            && converted.data[1] == 0
+            && converted.data[2] == 0
+            && converted.data[3] == 0
+        {
+            return Self::infinity();
+        }
+        // Find highest set bit
+        let mut msb = 0u32;
+        for i in (0..4).rev() {
+            if converted.data[i] != 0 {
+                msb = (i as u32) * 64 + (63 - converted.data[i].leading_zeros());
+                break;
+            }
+        }
+        let mut result = *self;
+        for i in (0..msb).rev() {
+            result = result.dbl();
+            let limb = i / 64;
+            let bit = i % 64;
+            if (converted.data[limb as usize] >> bit) & 1 == 1 {
+                result.add_assign_element(self);
+            }
+        }
+        result
+    }
 }
 
 impl std::ops::Neg for G2Element {

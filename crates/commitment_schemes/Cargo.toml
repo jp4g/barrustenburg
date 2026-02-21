@@ -1,0 +1,15 @@
+[package]
+name = "bbrs-commitment-schemes"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bbrs-ecc = { path = "../ecc" }
+bbrs-polynomials = { path = "../polynomials" }
+bbrs-srs = { path = "../srs" }
+bbrs-transcript = { path = "../transcript" }
+bbrs-numeric = { path = "../numeric" }
+rand = "0.9"
+
+[dev-dependencies]
+paste = "1"
