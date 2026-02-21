@@ -78,6 +78,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bbrs-honk"
+version = "0.1.0"
+dependencies = [
+ "bbrs-ecc",
+ "bbrs-flavor",
+ "bbrs-polynomials",
+ "bbrs-relations",
+]
+
+[[package]]
 name = "bbrs-numeric"
 version = "0.1.0"
 dependencies = [

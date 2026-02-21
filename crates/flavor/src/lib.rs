@@ -5,3 +5,4 @@
 
 pub mod flavor_macros;
 pub mod sumcheck_test_flavor;
+pub mod ultra_flavor;
