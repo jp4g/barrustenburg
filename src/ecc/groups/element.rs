@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use crate::ecc::fields::field_params::FieldParams;
 use crate::ecc::groups::affine_element::AffineElement;
 use crate::ecc::groups::curve_params::{BaseField, CurveParams, ScalarField};
+use crate::ecc::groups::wnaf;
 
 /// An elliptic curve point in Jacobian projective coordinates (X : Y : Z).
 ///
@@ -471,6 +472,94 @@ impl<C: CurveParams> Element<C> {
         self.mul_without_endomorphism(&scalar)
     }
 
+    /// Scalar multiplication using GLV endomorphism.
+    ///
+    /// Splits the scalar into two ~128-bit half-scalars via the endomorphism,
+    /// then uses a 4-bit WNAF with an 8-entry lookup table for efficient
+    /// double scalar multiplication (k1*P + k2*endo(P)).
+    ///
+    /// Matches C++ `mul_with_endomorphism` from element_impl.hpp.
+    pub fn mul_with_endomorphism(&self, scalar: &ScalarField<C>) -> Self {
+        if self.is_point_at_infinity() {
+            return Self::infinity();
+        }
+
+        const NUM_ROUNDS: usize = 32;
+        const NUM_WNAF_BITS: usize = 4;
+        const LOOKUP_SIZE: usize = 8;
+
+        let converted_scalar = scalar.from_montgomery_form();
+        if converted_scalar.is_zero() {
+            return Self::infinity();
+        }
+
+        // Build 8-entry lookup table: table[i] = (2i+1) * P
+        let mut lookup_table = [*self; LOOKUP_SIZE];
+        let d2 = self.dbl();
+        for i in 1..LOOKUP_SIZE {
+            lookup_table[i] = lookup_table[i - 1];
+            lookup_table[i].add_assign_element(&d2);
+        }
+
+        // Split scalar into two half-scalars
+        let (k1, k2) = converted_scalar.split_into_endomorphism_scalars();
+
+        // Compute interleaved WNAF for both half-scalars
+        let mut wnaf_table = [0u64; NUM_ROUNDS * 2];
+        let mut skew = false;
+        let mut endo_skew = false;
+        wnaf::fixed_wnaf(&k1, &mut wnaf_table, &mut skew, 0, 2, NUM_WNAF_BITS);
+        wnaf::fixed_wnaf(&k2, &mut wnaf_table[1..], &mut endo_skew, 0, 2, NUM_WNAF_BITS);
+
+        let mut accumulator = Self::infinity();
+        let beta = BaseField::<C>::cube_root_of_unity();
+
+        for i in 0..(NUM_ROUNDS * 2) {
+            let wnaf_entry = wnaf_table[i];
+            let index = (wnaf_entry & 0x0fffffff) as usize;
+            let sign = ((wnaf_entry >> 31) & 1) != 0;
+            let is_odd = (i & 1) == 1;
+
+            let mut to_add = lookup_table[index];
+            to_add.y.self_conditional_negate(sign ^ is_odd);
+            if is_odd {
+                to_add.x = to_add.x * beta;
+            }
+            accumulator.add_assign_element(&to_add);
+
+            if i != (2 * NUM_ROUNDS - 1) && is_odd {
+                for _ in 0..4 {
+                    accumulator.self_dbl();
+                }
+            }
+        }
+
+        // Skew correction
+        if skew {
+            let neg = Self::new(lookup_table[0].x, lookup_table[0].y.negate(), lookup_table[0].z);
+            accumulator.add_assign_element(&neg);
+        }
+        if endo_skew {
+            let endo_point = Self::new(
+                lookup_table[0].x * beta,
+                lookup_table[0].y,
+                lookup_table[0].z,
+            );
+            accumulator.add_assign_element(&endo_point);
+        }
+
+        accumulator
+    }
+
+    /// Scalar multiplication: dispatches to endomorphism or basic path.
+    pub fn mul(&self, scalar: &ScalarField<C>) -> Self {
+        if C::USE_ENDOMORPHISM {
+            self.mul_with_endomorphism(scalar)
+        } else {
+            self.mul_without_endomorphism(scalar)
+        }
+    }
+
     /// Compute a*self + b*other (double scalar multiplication).
     ///
     /// Used by ECDSA verify and Schnorr verify. Naive approach using two
@@ -485,6 +574,52 @@ impl<C: CurveParams> Element<C> {
         let term1 = self.mul_without_endomorphism(a);
         let term2 = other.mul_without_endomorphism(b);
         term1 + term2
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Batch operations
+// ---------------------------------------------------------------------------
+
+impl<C: CurveParams> Element<C> {
+    /// Batch normalize: convert N Jacobian points to affine (z=1) using a single inversion.
+    ///
+    /// Uses Montgomery's trick: accumulates the product of z-coordinates forward,
+    /// inverts once, then walks backward to recover individual z-inverses.
+    /// Infinity points are skipped in both passes.
+    ///
+    /// Matches C++ `batch_normalize` from element_impl.hpp.
+    pub fn batch_normalize(elements: &mut [Self]) {
+        let num_elements = elements.len();
+        if num_elements == 0 {
+            return;
+        }
+
+        let mut temporaries = Vec::with_capacity(num_elements);
+        let mut accumulator = BaseField::<C>::one();
+
+        // Forward pass: accumulate z-coordinate products
+        for i in 0..num_elements {
+            temporaries.push(accumulator);
+            if !elements[i].is_point_at_infinity() {
+                accumulator = accumulator * elements[i].z;
+            }
+        }
+
+        // Single inversion of accumulated product
+        accumulator = accumulator.invert();
+
+        // Backward pass: compute individual z-inverses and convert to affine
+        for i in (0..num_elements).rev() {
+            if !elements[i].is_point_at_infinity() {
+                let z_inv = accumulator * temporaries[i];
+                let zz_inv = z_inv.sqr();
+                elements[i].x = elements[i].x * zz_inv;
+                elements[i].y = elements[i].y * (zz_inv * z_inv);
+                accumulator = accumulator * elements[i].z;
+            }
+            elements[i].z = BaseField::<C>::one();
+        }
     }
 }
 

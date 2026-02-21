@@ -28,4 +28,18 @@ pub trait FieldParams: 'static + Send + Sync + Sized {
 
     /// Whether the modulus >= 2^254. Controls which add/sub/mul path is used.
     const MODULUS_IS_BIG: bool;
+
+    // --- GLV endomorphism constants (defaults to 0, override for curves with endomorphism) ---
+    const ENDO_G1_LO: u64 = 0;
+    const ENDO_G1_MID: u64 = 0;
+    const ENDO_G1_HI: u64 = 0;
+    const ENDO_G1_HIHI: u64 = 0;
+    const ENDO_G2_LO: u64 = 0;
+    const ENDO_G2_MID: u64 = 0;
+    const ENDO_G2_HI: u64 = 0;
+    const ENDO_G2_HIHI: u64 = 0;
+    const ENDO_MINUS_B1_LO: u64 = 0;
+    const ENDO_MINUS_B1_MID: u64 = 0;
+    const ENDO_B2_LO: u64 = 0;
+    const ENDO_B2_MID: u64 = 0;
 }

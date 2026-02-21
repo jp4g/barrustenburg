@@ -76,6 +76,20 @@ impl FieldParams for Secp256k1FrParams {
     ];
     const COSET_GENERATORS_3: [u64; 8] = [0; 8];
     const MODULUS_IS_BIG: bool = true; // 0xFFFF... >= 0x4000...
+
+    // GLV endomorphism constants for secp256k1 Fr (384-bit path)
+    const ENDO_G1_LO: u64 = 0xE893209A45DBB031;
+    const ENDO_G1_MID: u64 = 0x3DAA8A1471E8CA7F;
+    const ENDO_G1_HI: u64 = 0xE86C90E49284EB15;
+    const ENDO_G1_HIHI: u64 = 0x3086D221A7D46BCD;
+    const ENDO_G2_LO: u64 = 0x1571B4AE8AC47F71;
+    const ENDO_G2_MID: u64 = 0x221208AC9DF506C6;
+    const ENDO_G2_HI: u64 = 0x6F547FA90ABFE4C4;
+    const ENDO_G2_HIHI: u64 = 0xE4437ED6010E8828;
+    const ENDO_MINUS_B1_LO: u64 = 0x6F547FA90ABFE4C3;
+    const ENDO_MINUS_B1_MID: u64 = 0xE4437ED6010E8828;
+    const ENDO_B2_LO: u64 = 0xE86C90E49284EB15;
+    const ENDO_B2_MID: u64 = 0x3086D221A7D46BCD;
 }
 
 pub type Secp256k1Fr = Field<Secp256k1FrParams>;

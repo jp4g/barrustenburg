@@ -1,6 +1,8 @@
 use crate::ecc::curves::bn254::{Bn254FqParams, Bn254FrParams, Bn254G1Params, Fq, Fr};
 use crate::ecc::curves::grumpkin::GrumpkinG1Params;
-use crate::ecc::curves::secp256k1::{Secp256k1FqParams, Secp256k1G1Params};
+use crate::ecc::curves::secp256k1::{
+    Secp256k1FqParams, Secp256k1FrParams, Secp256k1G1Params, Secp256k1Fr,
+};
 use crate::ecc::curves::secp256r1::{Secp256r1FqParams, Secp256r1G1Params};
 use crate::ecc::fields::field::Field;
 use crate::ecc::fields::field_params::FieldParams;
@@ -835,4 +837,319 @@ fn element_double_scalar_mul_identity() {
     // 1*G + 0*G = G
     let result = g.double_scalar_mul(&one_scalar, &g, &zero);
     assert_eq!(result, g, "1*G + 0*G should equal G");
+}
+
+// =========================================================================
+// mul_512 tests
+// =========================================================================
+
+#[test]
+fn field_mul_512_known_values() {
+    // Multiply two known field elements (in raw form, not Montgomery)
+    // and verify the 512-bit result
+    let a = Fr::from_raw([2, 0, 0, 0]);
+    let b = Fr::from_raw([3, 0, 0, 0]);
+    let result = a.mul_512(&b);
+    assert_eq!(result[0], 6);
+    for i in 1..8 {
+        assert_eq!(result[i], 0, "limb {} should be 0", i);
+    }
+}
+
+#[test]
+fn field_mul_512_large_values() {
+    // Multiply max u64 by itself: (2^64-1)^2 = 2^128 - 2^65 + 1
+    let a = Fr::from_raw([u64::MAX, 0, 0, 0]);
+    let b = Fr::from_raw([u64::MAX, 0, 0, 0]);
+    let result = a.mul_512(&b);
+    // (2^64-1)^2 = 0xFFFFFFFFFFFFFFFE_0000000000000001
+    assert_eq!(result[0], 1);
+    assert_eq!(result[1], 0xFFFFFFFFFFFFFFFE);
+    for i in 2..8 {
+        assert_eq!(result[i], 0, "limb {} should be 0", i);
+    }
+}
+
+#[test]
+fn field_mul_512_cross_limb() {
+    // Verify cross-limb multiplication: a = [0, 1, 0, 0] * b = [0, 1, 0, 0]
+    // = 2^64 * 2^64 = 2^128 -> result[2] = 1
+    let a = Fr::from_raw([0, 1, 0, 0]);
+    let b = Fr::from_raw([0, 1, 0, 0]);
+    let result = a.mul_512(&b);
+    assert_eq!(result[0], 0);
+    assert_eq!(result[1], 0);
+    assert_eq!(result[2], 1);
+    for i in 3..8 {
+        assert_eq!(result[i], 0, "limb {} should be 0", i);
+    }
+}
+
+// =========================================================================
+// split_into_endomorphism_scalars tests
+// =========================================================================
+
+#[test]
+fn bn254_fr_split_endomorphism_scalars() {
+    // Split a known scalar and verify k1 + k2 * lambda == k (mod r)
+    let k = Fr::from(12345u64);
+    let k_conv = k.from_montgomery_form();
+    let (k1_limbs, k2_limbs) = k_conv.split_into_endomorphism_scalars();
+
+    // Reconstruct: k1 + k2 * lambda mod r
+    let k1 = Fr::from_limbs([k1_limbs[0], k1_limbs[1], 0, 0]);
+    let k2 = Fr::from_limbs([k2_limbs[0], k2_limbs[1], 0, 0]);
+    let lambda = Fr::from_raw(Bn254FrParams::CUBE_ROOT);
+    let reconstructed = k1 + k2 * lambda;
+    assert_eq!(reconstructed, k, "k1 + k2*lambda should equal k (mod r)");
+}
+
+#[test]
+fn bn254_fr_split_endomorphism_scalars_one() {
+    let k = Fr::one();
+    let k_conv = k.from_montgomery_form();
+    let (k1_limbs, k2_limbs) = k_conv.split_into_endomorphism_scalars();
+
+    let k1 = Fr::from_limbs([k1_limbs[0], k1_limbs[1], 0, 0]);
+    let k2 = Fr::from_limbs([k2_limbs[0], k2_limbs[1], 0, 0]);
+    let lambda = Fr::from_raw(Bn254FrParams::CUBE_ROOT);
+    let reconstructed = k1 + k2 * lambda;
+    assert_eq!(reconstructed, k, "split of 1 should reconstruct to 1");
+}
+
+#[test]
+fn secp256k1_fr_split_endomorphism_scalars() {
+    let k = Secp256k1Fr::from(999999u64);
+    let k_conv = k.from_montgomery_form();
+    let (k1_limbs, k2_limbs) = k_conv.split_into_endomorphism_scalars();
+
+    let k1 = Secp256k1Fr::from_limbs([k1_limbs[0], k1_limbs[1], 0, 0]);
+    let k2 = Secp256k1Fr::from_limbs([k2_limbs[0], k2_limbs[1], 0, 0]);
+    let lambda = Secp256k1Fr::from_raw(Secp256k1FrParams::CUBE_ROOT);
+    let reconstructed = k1 + k2 * lambda;
+    assert_eq!(
+        reconstructed, k,
+        "secp256k1: k1 + k2*lambda should equal k (mod r)"
+    );
+}
+
+// =========================================================================
+// WNAF tests
+// =========================================================================
+
+#[test]
+fn wnaf_encode_basic_properties() {
+    use crate::ecc::groups::wnaf;
+
+    // Test with odd scalar
+    let scalar: [u64; 2] = [0xDEADBEEF12345679, 0x1234];
+    let wnaf_bits = 4usize;
+    let wnaf_entries = (wnaf::SCALAR_BITS + wnaf_bits - 1) / wnaf_bits; // 32
+    let mut table = vec![0u64; wnaf_entries + 1];
+    let mut skew = false;
+
+    wnaf::fixed_wnaf(&scalar, &mut table, &mut skew, 0, 1, wnaf_bits);
+
+    // Odd scalar -> no skew
+    assert!(!skew, "odd scalar should not be skewed");
+
+    // All entries should have abs value < 2^(wnaf_bits-1) = 8
+    for i in 0..wnaf_entries {
+        let abs_val = table[i] & 0x0fffffff;
+        assert!(abs_val < 8, "WNAF entry {} abs value {} >= 8", i, abs_val);
+    }
+}
+
+#[test]
+fn wnaf_even_scalar_skew() {
+    use crate::ecc::groups::wnaf;
+
+    let scalar: [u64; 2] = [0xDEADBEEF12345678, 0x1234]; // even scalar
+    let wnaf_bits = 4usize;
+    let wnaf_entries = (wnaf::SCALAR_BITS + wnaf_bits - 1) / wnaf_bits;
+    let mut table = vec![0u64; wnaf_entries + 1];
+    let mut skew = false;
+
+    wnaf::fixed_wnaf(&scalar, &mut table, &mut skew, 0, 1, wnaf_bits);
+
+    assert!(skew, "even scalar should be skewed");
+}
+
+#[test]
+fn wnaf_interleaved_two_scalars() {
+    use crate::ecc::groups::wnaf;
+
+    // Test interleaved encoding with num_points=2 (as used by endomorphism mul)
+    let k1: [u64; 2] = [0x123456789ABCDEF1, 0x42];
+    let k2: [u64; 2] = [0xFEDCBA9876543211, 0x13];
+
+    let wnaf_entries = (wnaf::SCALAR_BITS + 4 - 1) / 4; // 32
+    let mut table = vec![0u64; wnaf_entries * 2];
+    let mut skew1 = false;
+    let mut skew2 = false;
+
+    wnaf::fixed_wnaf(&k1, &mut table, &mut skew1, 0, 2, 4);
+    wnaf::fixed_wnaf(&k2, &mut table[1..], &mut skew2, 0, 2, 4);
+
+    // k1 is odd, k2 is odd
+    assert!(!skew1, "k1 should not be skewed");
+    assert!(!skew2, "k2 should not be skewed");
+
+    // Even-indexed entries belong to k1, odd-indexed to k2
+    for i in (0..wnaf_entries * 2).step_by(2) {
+        let abs_val = table[i] & 0x0fffffff;
+        assert!(abs_val < 8, "k1 WNAF entry abs value {} >= 8", abs_val);
+    }
+    for i in (1..wnaf_entries * 2).step_by(2) {
+        let abs_val = table[i] & 0x0fffffff;
+        assert!(abs_val < 8, "k2 WNAF entry abs value {} >= 8", abs_val);
+    }
+}
+
+// =========================================================================
+// mul_with_endomorphism tests
+// =========================================================================
+
+#[test]
+fn bn254_mul_with_endomorphism_matches_basic() {
+    let g = Element::<Bn254G1Params>::one();
+    // Test with several scalar values
+    for val in [1u64, 2, 7, 42, 12345, 999999] {
+        let scalar = Fr::from(val);
+        let expected = g.mul_without_endomorphism(&scalar);
+        let result = g.mul_with_endomorphism(&scalar);
+        assert_eq!(
+            result, expected,
+            "endomorphism mul should match basic mul for scalar={}",
+            val
+        );
+    }
+}
+
+#[test]
+fn bn254_mul_with_endomorphism_large_scalar() {
+    let g = Element::<Bn254G1Params>::one();
+    let scalar = Fr::from_limbs([
+        0xDEADBEEF12345678,
+        0xCAFEBABE87654321,
+        0x1234567890ABCDEF,
+        0x0FEDCBA098765432,
+    ]);
+    let expected = g.mul_without_endomorphism(&scalar);
+    let result = g.mul_with_endomorphism(&scalar);
+    assert_eq!(result, expected, "endomorphism mul should match for large scalar");
+}
+
+#[test]
+fn bn254_mul_dispatch() {
+    // Test that mul() dispatches to endomorphism path and gives correct result
+    let g = Element::<Bn254G1Params>::one();
+    let scalar = Fr::from(42u64);
+    let expected = g.mul_without_endomorphism(&scalar);
+    let result = g.mul(&scalar);
+    assert_eq!(result, expected, "mul() should match mul_without_endomorphism");
+}
+
+#[test]
+fn secp256k1_mul_with_endomorphism_matches_basic() {
+    let g = Element::<Secp256k1G1Params>::one();
+    for val in [1u64, 2, 7, 42, 12345] {
+        let scalar = Secp256k1Fr::from(val);
+        let expected = g.mul_without_endomorphism(&scalar);
+        let result = g.mul_with_endomorphism(&scalar);
+        assert_eq!(
+            result, expected,
+            "secp256k1: endomorphism mul should match basic mul for scalar={}",
+            val
+        );
+    }
+}
+
+#[test]
+fn mul_with_endomorphism_zero_returns_infinity() {
+    let g = Element::<Bn254G1Params>::one();
+    let zero = Fr::zero();
+    let result = g.mul_with_endomorphism(&zero);
+    assert!(result.is_point_at_infinity(), "mul by zero should be infinity");
+}
+
+#[test]
+fn mul_with_endomorphism_infinity_returns_infinity() {
+    let inf = Element::<Bn254G1Params>::infinity();
+    let scalar = Fr::from(42u64);
+    let result = inf.mul_with_endomorphism(&scalar);
+    assert!(
+        result.is_point_at_infinity(),
+        "mul on infinity should return infinity"
+    );
+}
+
+// =========================================================================
+// batch_normalize tests
+// =========================================================================
+
+#[test]
+fn batch_normalize_matches_individual() {
+    let g = Element::<Bn254G1Params>::one();
+    let mut points: Vec<Element<Bn254G1Params>> = Vec::new();
+
+    // Create several points with different z-coordinates
+    for i in 1..=8u64 {
+        points.push(g.scalar_mul(&[i, 0, 0, 0]));
+    }
+
+    // Save expected affine coordinates
+    let expected_affines: Vec<_> = points.iter().map(|p| p.to_affine()).collect();
+
+    // Batch normalize
+    Element::batch_normalize(&mut points);
+
+    // Verify each normalized point matches
+    for (i, point) in points.iter().enumerate() {
+        let affine = point.to_affine();
+        assert_eq!(
+            affine, expected_affines[i],
+            "batch_normalize mismatch at index {}",
+            i
+        );
+        // z should be 1 after normalization
+        assert_eq!(point.z, Fq::one(), "z should be 1 after batch_normalize");
+    }
+}
+
+#[test]
+fn batch_normalize_with_infinity() {
+    let g = Element::<Bn254G1Params>::one();
+    let mut points = vec![
+        g.scalar_mul(&[1, 0, 0, 0]),
+        Element::infinity(),
+        g.scalar_mul(&[3, 0, 0, 0]),
+    ];
+
+    let expected_0 = points[0].to_affine();
+    let expected_2 = points[2].to_affine();
+
+    Element::batch_normalize(&mut points);
+
+    assert_eq!(points[0].to_affine(), expected_0);
+    assert!(
+        points[1].is_point_at_infinity() || points[1].z == Fq::one(),
+        "infinity point should be handled"
+    );
+    assert_eq!(points[2].to_affine(), expected_2);
+}
+
+#[test]
+fn batch_normalize_empty() {
+    let mut points: Vec<Element<Bn254G1Params>> = Vec::new();
+    Element::batch_normalize(&mut points); // Should not panic
+}
+
+#[test]
+fn batch_normalize_single() {
+    let g = Element::<Bn254G1Params>::one();
+    let mut points = vec![g.scalar_mul(&[5, 0, 0, 0])];
+    let expected = points[0].to_affine();
+    Element::batch_normalize(&mut points);
+    assert_eq!(points[0].to_affine(), expected);
 }

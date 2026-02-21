@@ -99,6 +99,16 @@ impl FieldParams for Bn254FrParams {
         0x1d9598e8a7e39857, 0x2ba010aa41eb7786, 0x39aa886bdbf356b5, 0x47b5002d75fb35e5,
     ];
     const MODULUS_IS_BIG: bool = false; // 0x3064... < 0x4000...
+
+    // GLV endomorphism constants for BN254 Fr
+    const ENDO_G1_LO: u64 = 0x7a7bd9d4391eb18d;
+    const ENDO_G1_MID: u64 = 0x4ccef014a773d2cf;
+    const ENDO_G1_HI: u64 = 0x0000000000000002;
+    const ENDO_G2_LO: u64 = 0xd91d232ec7e0b3d7;
+    const ENDO_G2_MID: u64 = 0x0000000000000002;
+    const ENDO_MINUS_B1_LO: u64 = 0x8211bbeb7d4f1128;
+    const ENDO_MINUS_B1_MID: u64 = 0x6f4d8248eeb859fc;
+    const ENDO_B2_LO: u64 = 0x89d3256894d213e3;
 }
 
 pub type Fr = Field<Bn254FrParams>;

@@ -944,6 +944,153 @@ impl<P: FieldParams> Field<P> {
         (reduced.data[limb_idx] >> bit_idx) & 1 == 1
     }
 
+    /// Split scalar k into (k1, k2) via GLV endomorphism: k ≡ k1 + k2·λ (mod p).
+    /// Returns two 128-bit half-scalars as ([u64; 2], [u64; 2]).
+    ///
+    /// Two paths:
+    /// - 254-bit (BN254 Fr): modulus[3] < 0x4000000000000000
+    /// - 384-bit (secp256k1 Fr): modulus[3] >= 0x4000000000000000
+    pub fn split_into_endomorphism_scalars(&self) -> ([u64; 2], [u64; 2]) {
+        if !P::MODULUS_IS_BIG {
+            // 254-bit path (BN254 Fr)
+            let input = self.reduce();
+
+            let endo_g1 = Self::from_raw([P::ENDO_G1_LO, P::ENDO_G1_MID, P::ENDO_G1_HI, 0]);
+            let endo_g2 = Self::from_raw([P::ENDO_G2_LO, P::ENDO_G2_MID, 0, 0]);
+            let endo_minus_b1 =
+                Self::from_raw([P::ENDO_MINUS_B1_LO, P::ENDO_MINUS_B1_MID, 0, 0]);
+            let endo_b2 = Self::from_raw([P::ENDO_B2_LO, P::ENDO_B2_MID, 0, 0]);
+
+            // c1 = (g2 * k) >> 256
+            let c1 = endo_g2.mul_512(&input);
+            // c2 = (g1 * k) >> 256
+            let c2 = endo_g1.mul_512(&input);
+
+            let c1_hi = Self::from_raw([c1[4], c1[5], c1[6], c1[7]]);
+            let c2_hi = Self::from_raw([c2[4], c2[5], c2[6], c2[7]]);
+
+            // q1 = c1_hi * (-b1), take low 256 bits
+            let q1 = c1_hi.mul_512(&endo_minus_b1);
+            // q2 = c2_hi * b2, take low 256 bits
+            let q2 = c2_hi.mul_512(&endo_b2);
+
+            let q1_lo = Self::from_raw([q1[0], q1[1], q1[2], q1[3]]);
+            let q2_lo = Self::from_raw([q2[0], q2[1], q2[2], q2[3]]);
+
+            let t1 = (q2_lo - q1_lo).reduce();
+            let beta = Self::cube_root_of_unity();
+            let t2 = (t1 * beta + input).reduce();
+
+            ([t2.data[0], t2.data[1]], [t1.data[0], t1.data[1]])
+        } else {
+            // 384-bit path (secp256k1 Fr)
+            use crypto_bigint::{U256, U512};
+
+            let minus_b1f =
+                Self::from_raw([P::ENDO_MINUS_B1_LO, P::ENDO_MINUS_B1_MID, 0, 0]);
+            let b2f = Self::from_raw([P::ENDO_B2_LO, P::ENDO_B2_MID, 0, 0]);
+
+            let g1 = U256::from_words([
+                P::ENDO_G1_LO,
+                P::ENDO_G1_MID,
+                P::ENDO_G1_HI,
+                P::ENDO_G1_HIHI,
+            ]);
+            let g2 = U256::from_words([
+                P::ENDO_G2_LO,
+                P::ENDO_G2_MID,
+                P::ENDO_G2_HI,
+                P::ENDO_G2_HIHI,
+            ]);
+
+            let kf = self.reduce();
+            let k = U256::from_words([kf.data[0], kf.data[1], kf.data[2], kf.data[3]]);
+
+            // c1 = (k * g1) >> 384
+            let k_wide = U512::from((k, U256::ZERO));
+            let g1_wide = U512::from((g1, U256::ZERO));
+            let g2_wide = U512::from((g2, U256::ZERO));
+
+            let c1_full = k_wide.wrapping_mul(&g1_wide);
+            let c2_full = k_wide.wrapping_mul(&g2_wide);
+
+            // >> 384 = shift right by 384 bits = take words [6] and [7] of the 512-bit result
+            let c1_words: [u64; 8] = c1_full.to_words();
+            let c2_words: [u64; 8] = c2_full.to_words();
+
+            // 384 / 64 = 6, so c >> 384 starts at word index 6
+            let c1_val = [c1_words[6], c1_words[7], 0u64, 0u64];
+            let c2_val = [c2_words[6], c2_words[7], 0u64, 0u64];
+
+            // Convert to field and to Montgomery form for multiplication
+            let mut c1f = Self::from_raw(c1_val);
+            let mut c2f = Self::from_raw(c2_val);
+            c1f = c1f.to_montgomery_form();
+            c2f = c2f.to_montgomery_form();
+
+            c1f = c1f * minus_b1f;
+            c2f = c2f * b2f;
+
+            let r2f = c1f - c2f;
+            let beta = Self::cube_root_of_unity();
+            let r1f = self.reduce() - r2f * beta;
+            let neg_r2f = r2f.negate();
+
+            // r1f and neg_r2f are already in standard form (not Montgomery):
+            // - c1f/c2f were computed via Montgomery(mont_value) * raw(minus_b1f) = standard result
+            // - r2f * beta = standard * Montgomery(beta) = standard result
+            // - self.reduce() is standard form (caller passes from_montgomery_form())
+            // So just reduce and extract limbs directly.
+            let r1_reduced = r1f.reduce();
+            let r2_reduced = neg_r2f.reduce();
+
+            (
+                [r1_reduced.data[0], r1_reduced.data[1]],
+                [r2_reduced.data[0], r2_reduced.data[1]],
+            )
+        }
+    }
+
+    /// Conditionally negate in-place: if predicate is true, self = -self.
+    #[inline]
+    pub fn self_conditional_negate(&mut self, predicate: bool) {
+        if predicate {
+            *self = self.negate();
+        }
+    }
+
+    /// Full 256×256 → 512-bit multiplication WITHOUT Montgomery reduction.
+    /// Returns [u64; 8] in little-endian limb order.
+    ///
+    /// Ported from C++ `field_impl_generic.hpp` `mul_512`, `__SIZEOF_INT128__` path.
+    pub fn mul_512(&self, other: &Self) -> [u64; 8] {
+        // Round 0: data[0] * other[0..3]
+        let (r0, carry) = mul_wide(self.data[0], other.data[0]);
+        let (r1, carry) = mac_mini(carry, self.data[0], other.data[1]);
+        let (r2, carry) = mac_mini(carry, self.data[0], other.data[2]);
+        let (r3, carry_2) = mac_mini(carry, self.data[0], other.data[3]);
+
+        // Round 1: data[1] * other[0..3]
+        let (r1, carry) = mac_mini(r1, self.data[1], other.data[0]);
+        let (r2, carry) = mac(r2, self.data[1], other.data[1], carry);
+        let (r3, carry) = mac(r3, self.data[1], other.data[2], carry);
+        let (r4, carry_2) = mac(carry_2, self.data[1], other.data[3], carry);
+
+        // Round 2: data[2] * other[0..3]
+        let (r2, carry) = mac_mini(r2, self.data[2], other.data[0]);
+        let (r3, carry) = mac(r3, self.data[2], other.data[1], carry);
+        let (r4, carry) = mac(r4, self.data[2], other.data[2], carry);
+        let (r5, carry_2) = mac(carry_2, self.data[2], other.data[3], carry);
+
+        // Round 3: data[3] * other[0..3]
+        let (r3, carry) = mac_mini(r3, self.data[3], other.data[0]);
+        let (r4, carry) = mac(r4, self.data[3], other.data[1], carry);
+        let (r5, carry) = mac(r5, self.data[3], other.data[2], carry);
+        let (r6, carry_2) = mac(carry_2, self.data[3], other.data[3], carry);
+
+        [r0, r1, r2, r3, r4, r5, r6, carry_2]
+    }
+
     /// Generate a uniformly random field element.
     ///
     /// Generates 512 random bits and reduces mod p for uniform distribution.
