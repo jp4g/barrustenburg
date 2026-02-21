@@ -48,9 +48,13 @@ impl<P: FieldParams> Polynomial<P> {
         Self::from_coefficients(coeffs, virtual_size)
     }
 
-    /// Allocate a polynomial of `virtual_size` elements (all zero) that can later be `shifted()`.
+    /// Allocate a shiftable polynomial of `virtual_size` with `start_index = 1`.
+    ///
+    /// A "shiftable" polynomial has its real data at indices `[1, virtual_size)`,
+    /// with index 0 being a virtual zero. This allows `shifted()` to decrement the
+    /// start index to 0, effectively reading `shifted[i] = original[i+1]`.
     pub fn shiftable(virtual_size: usize) -> Self {
-        Self::new(virtual_size, virtual_size, 0)
+        Self::new(virtual_size - 1, virtual_size, 1)
     }
 
     /// Random polynomial with `size` non-zero coefficients.
@@ -239,21 +243,29 @@ impl<P: FieldParams> Polynomial<P> {
 // ── Manipulation ──────────────────────────────────────────────────────────────
 
 impl<P: FieldParams> Polynomial<P> {
-    /// Return a new polynomial whose coefficients start at index `self.start_index() + 1`,
-    /// effectively dividing by X (dropping the constant term).
+    /// Return a "shifted" view: a polynomial reading the same data at one index earlier.
+    ///
+    /// If the original polynomial has `start_index = s`, the shifted polynomial has
+    /// `start_index = s - 1` and `end_index = end - 1`, so `shifted[i] = original[i + 1]`.
+    ///
+    /// Requires `start_index >= 1` (the polynomial must be "shiftable").
+    ///
+    /// Port of C++ `Polynomial::shifted()`.
     pub fn shifted(&self) -> Self {
         let old_start = self.start_index();
-        let old_data = self.data();
         assert!(
-            old_data.len() > 1,
-            "shifted() requires at least 2 backing elements"
+            old_start >= 1,
+            "shifted() requires start_index >= 1 (got {}). Use shiftable() to create shiftable polynomials.",
+            old_start,
         );
-        let new_data = old_data[1..].to_vec();
+        let old_data = self.data();
+        // Same backing data, but start and end decremented by 1.
+        // This means shifted[i] = original[i+1].
         Self {
             coefficients: SharedShiftedVirtualZeroesArray::from_vec(
-                new_data,
+                old_data.to_vec(),
                 self.virtual_size(),
-                old_start + 1,
+                old_start - 1,
             ),
         }
     }
@@ -389,21 +401,21 @@ mod tests {
 
     #[test]
     fn test_shifted() {
-        let p = Polynomial::from_coefficients(
-            vec![
-                Fr::from(1u64),
-                Fr::from(2u64),
-                Fr::from(3u64),
-                Fr::from(4u64),
-            ],
-            8,
-        );
+        // Create a shiftable polynomial (start_index = 1) with data at indices [1,2,3,4]
+        let mut p = Polynomial::shiftable(5);
+        *p.at_mut(1) = Fr::from(10u64);
+        *p.at_mut(2) = Fr::from(20u64);
+        *p.at_mut(3) = Fr::from(30u64);
+        *p.at_mut(4) = Fr::from(40u64);
+
         let s = p.shifted();
-        assert_eq!(s.start_index(), 1);
-        assert_eq!(s.size(), 3);
-        assert_eq!(s.get(1), Fr::from(2u64));
-        assert_eq!(s.get(2), Fr::from(3u64));
-        assert_eq!(s.get(3), Fr::from(4u64));
+        // shifted() decrements start_index: 1 -> 0
+        assert_eq!(s.start_index(), 0);
+        // Same data, so s[i] = p[i+1]
+        assert_eq!(s.get(0), Fr::from(10u64)); // p[1]
+        assert_eq!(s.get(1), Fr::from(20u64)); // p[2]
+        assert_eq!(s.get(2), Fr::from(30u64)); // p[3]
+        assert_eq!(s.get(3), Fr::from(40u64)); // p[4]
     }
 
     #[test]
