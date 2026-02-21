@@ -124,6 +124,43 @@ impl<P: FieldParams, const N: usize> Univariate<P, N> {
         out
     }
 
+    // -- In-place extension ---------------------------------------------------
+
+    /// Extend evaluations in-place from {0..INITIAL-1} to {0..N-1} using Newton
+    /// forward difference extrapolation. The first `INITIAL` evaluations must
+    /// already be populated; the rest are overwritten.
+    ///
+    /// Port of C++ `Univariate::self_extend_from<INITIAL>()`.
+    pub fn self_extend_from<const INITIAL: usize>(&mut self) {
+        assert!(INITIAL <= N, "self_extend_from: INITIAL must be <= N");
+        if INITIAL >= N {
+            return;
+        }
+
+        // Build forward-difference coefficients from evaluations[0..INITIAL].
+        let mut diffs = [Field::<P>::zero(); N];
+        for i in 0..INITIAL {
+            diffs[i] = self.evaluations[i];
+        }
+
+        // Convert evaluations to forward-difference coefficients.
+        for i in 1..INITIAL {
+            for j in (i..INITIAL).rev() {
+                diffs[j] = diffs[j] - diffs[j - 1];
+            }
+        }
+
+        // Iteratively shift the origin and record new evaluations.
+        for x in 1..N {
+            for j in 0..INITIAL - 1 {
+                diffs[j] = diffs[j] + diffs[j + 1];
+            }
+            if x >= INITIAL {
+                self.evaluations[x] = diffs[0];
+            }
+        }
+    }
+
     // -- Barycentric evaluation ---------------------------------------------
 
     /// Evaluate the unique degree-(N-1) polynomial through the N evaluations at

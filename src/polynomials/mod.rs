@@ -4,6 +4,8 @@ pub mod polynomial_arithmetic;
 pub mod polynomial;
 pub mod evaluation_domain;
 pub mod univariate;
+pub mod barycentric;
+pub mod eq_polynomial;
 
 #[cfg(test)]
 mod tests;

@@ -1,5 +1,7 @@
 use crate::ecc::curves::bn254::Bn254FrParams;
 use crate::ecc::fields::field::Field;
+use crate::polynomials::barycentric::BarycentricData;
+use crate::polynomials::eq_polynomial::{ProverEqPolynomial, VerifierEqPolynomial};
 use crate::polynomials::evaluation_domain::EvaluationDomain;
 use crate::polynomials::polynomial::Polynomial;
 use crate::polynomials::polynomial_arithmetic;
@@ -776,4 +778,432 @@ fn split_polynomial_evaluate() {
     }
 
     assert_eq!(result, expected);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BarycentricData tests (from barycentric.test.cpp)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn barycentric_big_domain_construction() {
+    // C++ test: CompileTimeComputation — big_domain[5] == 5 for domain=2, evals=10
+    let bc = BarycentricData::<Bn254FrParams>::new(2, 10);
+    assert_eq!(bc.big_domain[5], Fr::from(5u64));
+}
+
+#[test]
+fn barycentric_extend() {
+    // C++ test: Extend — Univariate {1,2} extend_to 10 → {1..10}
+    let f = Univariate::<Bn254FrParams, 2>::new([Fr::from(1u64), Fr::from(2u64)]);
+    let result = f.extend_to::<10>();
+    let expected = Univariate::<Bn254FrParams, 10>::new([
+        Fr::from(1u64),
+        Fr::from(2u64),
+        Fr::from(3u64),
+        Fr::from(4u64),
+        Fr::from(5u64),
+        Fr::from(6u64),
+        Fr::from(7u64),
+        Fr::from(8u64),
+        Fr::from(9u64),
+        Fr::from(10u64),
+    ]);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn barycentric_self_extend() {
+    // C++ test: SelfExtend — Univariate<10> with first 2 set, self_extend_from<2> → {1..10}
+    let mut f = Univariate::<Bn254FrParams, 10>::new([
+        Fr::from(1u64),
+        Fr::from(2u64),
+        Fr::zero(),
+        Fr::zero(),
+        Fr::zero(),
+        Fr::zero(),
+        Fr::zero(),
+        Fr::zero(),
+        Fr::zero(),
+        Fr::zero(),
+    ]);
+    f.self_extend_from::<2>();
+    let expected = Univariate::<Bn254FrParams, 10>::new([
+        Fr::from(1u64),
+        Fr::from(2u64),
+        Fr::from(3u64),
+        Fr::from(4u64),
+        Fr::from(5u64),
+        Fr::from(6u64),
+        Fr::from(7u64),
+        Fr::from(8u64),
+        Fr::from(9u64),
+        Fr::from(10u64),
+    ]);
+    assert_eq!(f, expected);
+}
+
+#[test]
+fn barycentric_evaluate() {
+    // C++ test: Evaluate — Univariate {1,2} evaluate at u=5 → 6
+    let f = Univariate::<Bn254FrParams, 2>::new([Fr::from(1u64), Fr::from(2u64)]);
+    let result = f.evaluate(Fr::from(5u64));
+    assert_eq!(result, Fr::from(6u64));
+}
+
+#[test]
+fn barycentric_data_2_to_3() {
+    // C++ test: BarycentricData2to3 — verify tables + extension + random eval
+    let bc = BarycentricData::<Bn254FrParams>::new(2, 3);
+
+    // big_domain
+    assert_eq!(bc.big_domain, vec![Fr::from(0u64), Fr::from(1u64), Fr::from(2u64)]);
+
+    // lagrange_denominators: d_0 = 0-1 = -1, d_1 = 1-0 = 1
+    assert_eq!(bc.lagrange_denominators, vec![-Fr::one(), Fr::one()]);
+
+    // full_numerator_values: M(0) = 0*(0-1) = 0, M(1) = 1*(1-1) = 0, M(2) = 2*(2-1) = 2
+    assert_eq!(
+        bc.full_numerator_values,
+        vec![Fr::zero(), Fr::zero(), Fr::from(2u64)]
+    );
+
+    // e1(X) = 1 + X. evaluate at random u → u + 1
+    let e1 = Univariate::<Bn254FrParams, 2>::new([Fr::from(1u64), Fr::from(2u64)]);
+    let u = Fr::random_element();
+    let calculated = e1.evaluate(u);
+    assert_eq!(u + Fr::one(), calculated);
+
+    // Extension from 2 to 3: {1, 2} → {1, 2, 3}
+    let ext = e1.extend_to::<3>();
+    let expected = Univariate::<Bn254FrParams, 3>::new([Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)]);
+    assert_eq!(ext, expected);
+}
+
+#[test]
+fn barycentric_data_5_to_6() {
+    // C++ test: BarycentricData5to6 — extend degree-4 poly {1,3,25,109,321} → {..,751}
+    let e1 = Univariate::<Bn254FrParams, 5>::new([
+        Fr::from(1u64),
+        Fr::from(3u64),
+        Fr::from(25u64),
+        Fr::from(109u64),
+        Fr::from(321u64),
+    ]);
+    let ext = e1.extend_to::<6>();
+    let expected = Univariate::<Bn254FrParams, 6>::new([
+        Fr::from(1u64),
+        Fr::from(3u64),
+        Fr::from(25u64),
+        Fr::from(109u64),
+        Fr::from(321u64),
+        Fr::from(751u64),
+    ]);
+    assert_eq!(ext, expected);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EqPolynomial tests (from eq_polynomial.test.cpp)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// --- Test helpers ---
+
+/// Reference eq(r,u) = prod_i ((1 - r_i)(1 - u_i) + r_i * u_i)
+fn eq_manual(r: &[Fr], u: &[Fr]) -> Fr {
+    assert_eq!(r.len(), u.len());
+    let one = Fr::one();
+    let mut acc = one;
+    for i in 0..r.len() {
+        let term = (one - r[i]) * (one - u[i]) + r[i] * u[i];
+        acc = acc * term;
+    }
+    acc
+}
+
+/// Boolean vector of length d from mask (LSB → index 0)
+fn bool_vec_from_mask(d: usize, mask: u64) -> Vec<Fr> {
+    (0..d)
+        .map(|i| Fr::from(((mask >> i) & 1) as u64))
+        .collect()
+}
+
+// --- VerifierEqPolynomial tests ---
+
+#[test]
+fn verifier_eq_initialize_coeffs() {
+    // C++ test: InitializeCoeffs — a_i, b_i for r = {0, 1, 2, 3}
+    let r = vec![Fr::from(0u64), Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)];
+    let eq = VerifierEqPolynomial::<Bn254FrParams>::new(r);
+
+    assert_eq!(eq.r.len(), 4);
+    assert_eq!(eq.a.len(), 4);
+    assert_eq!(eq.b.len(), 4);
+
+    // a_i = 2*r_i - 1
+    assert_eq!(eq.a[0], -Fr::one());
+    assert_eq!(eq.a[1], Fr::one());
+    assert_eq!(eq.a[2], Fr::from(3u64));
+    assert_eq!(eq.a[3], Fr::from(5u64));
+
+    // b_i = 1 - r_i
+    assert_eq!(eq.b[0], Fr::one());
+    assert_eq!(eq.b[1], Fr::zero());
+    assert_eq!(eq.b[2], -Fr::one());
+    assert_eq!(eq.b[3], -(Fr::from(2u64)));
+}
+
+#[test]
+fn verifier_eq_evaluate_matches_manual() {
+    // C++ test: EvaluateMatchesManualSmall
+    let r: Vec<Fr> = (0..5).map(|i| Fr::from(i as u64)).collect();
+    let u: Vec<Fr> = (5..10).map(|i| Fr::from(i as u64)).collect();
+
+    let eq = VerifierEqPolynomial::<Bn254FrParams>::new(r.clone());
+    let got = eq.evaluate(&u);
+    let expect = eq_manual(&r, &u);
+    assert_eq!(got, expect);
+}
+
+#[test]
+fn verifier_eq_static_eval_matches_member() {
+    // C++ test: StaticEvalMatchesMemberEvaluate
+    let r = vec![Fr::from(2u64), Fr::from(0u64), Fr::from(5u64), Fr::from(1u64)];
+    let u = vec![Fr::from(3u64), Fr::from(7u64), Fr::from(4u64), Fr::from(6u64)];
+
+    let s = VerifierEqPolynomial::<Bn254FrParams>::eval(&r, &u);
+    let eq = VerifierEqPolynomial::<Bn254FrParams>::new(r);
+    let m = eq.evaluate(&u);
+    assert_eq!(s, m);
+}
+
+#[test]
+fn verifier_eq_symmetry() {
+    // C++ test: SymmetryEqRUEqualsEqUR
+    let r: Vec<Fr> = vec![Fr::from(0u64), Fr::from(2u64), Fr::from(4u64), Fr::from(6u64), Fr::from(8u64)];
+    let u: Vec<Fr> = vec![Fr::from(1u64), Fr::from(3u64), Fr::from(5u64), Fr::from(7u64), Fr::from(9u64)];
+
+    let eq_r = VerifierEqPolynomial::<Bn254FrParams>::new(r.clone());
+    let eq_u = VerifierEqPolynomial::<Bn254FrParams>::new(u.clone());
+
+    let ru = eq_r.evaluate(&u);
+    let ur = eq_u.evaluate(&r);
+    assert_eq!(ru, ur);
+}
+
+#[test]
+fn verifier_eq_boolean_delta() {
+    // C++ test: BooleanDeltaBehavior — Kronecker delta on {0,1}^5
+    let d = 5usize;
+
+    for big_r in 0..(1u64 << d) {
+        let r = bool_vec_from_mask(d, big_r);
+        let eq = VerifierEqPolynomial::<Bn254FrParams>::new(r);
+        for big_u in 0..(1u64 << d) {
+            let u = bool_vec_from_mask(d, big_u);
+            let val = eq.evaluate(&u);
+            if big_r == big_u {
+                assert_eq!(val, Fr::one(), "R={} U={}", big_r, big_u);
+            } else {
+                assert_eq!(val, Fr::zero(), "R={} U={}", big_r, big_u);
+            }
+        }
+    }
+}
+
+#[test]
+fn verifier_eq_edge_cases() {
+    // C++ test: EdgeCases — empty, d=1, all zeros, all ones, alternating
+
+    // d = 0: empty product = 1
+    {
+        let r: Vec<Fr> = vec![];
+        let u: Vec<Fr> = vec![];
+        let val = VerifierEqPolynomial::<Bn254FrParams>::eval(&r, &u);
+        assert_eq!(val, Fr::one());
+    }
+
+    // d = 1: explicit formula check
+    {
+        let r = vec![Fr::from(2u64)];
+        let u = vec![Fr::from(7u64)];
+        let expect = (Fr::one() - r[0]) * (Fr::one() - u[0]) + r[0] * u[0];
+        let eq = VerifierEqPolynomial::<Bn254FrParams>::new(r);
+        let got = eq.evaluate(&u);
+        assert_eq!(got, expect);
+    }
+
+    // all zeros
+    {
+        let r = vec![Fr::zero(); 8];
+        let u = vec![Fr::zero(); 8];
+        let eq = VerifierEqPolynomial::<Bn254FrParams>::new(r);
+        assert_eq!(eq.evaluate(&u), Fr::one());
+    }
+
+    // all ones
+    {
+        let r = vec![Fr::one(); 8];
+        let u = vec![Fr::one(); 8];
+        let eq = VerifierEqPolynomial::<Bn254FrParams>::new(r);
+        assert_eq!(eq.evaluate(&u), Fr::one());
+    }
+
+    // alternating Boolean pattern
+    {
+        let r = vec![
+            Fr::zero(), Fr::one(), Fr::zero(), Fr::one(),
+            Fr::zero(), Fr::one(), Fr::zero(), Fr::one(),
+        ];
+        let u = vec![
+            Fr::one(), Fr::zero(), Fr::one(), Fr::zero(),
+            Fr::one(), Fr::zero(), Fr::one(), Fr::zero(),
+        ];
+        let eq = VerifierEqPolynomial::<Bn254FrParams>::new(r);
+        assert_eq!(eq.evaluate(&u), Fr::zero());
+    }
+}
+
+// --- Prover/Verifier consistency tests ---
+
+#[test]
+fn prover_eq_matches_verifier_on_boolean() {
+    // C++ test: ProverTableMatchesVerifierOnBooleanPoints — d=5, all 32 Boolean points match
+    let d = 5usize;
+    let r: Vec<Fr> = (0..d).map(|i| Fr::from((2 * i + 7) as u64)).collect();
+
+    let v = VerifierEqPolynomial::<Bn254FrParams>::new(r.clone());
+    let peq = ProverEqPolynomial::construct(&r, d);
+
+    for ell in 0..(1u64 << d) {
+        let u = bool_vec_from_mask(d, ell);
+        let got_ver = v.evaluate(&u);
+        let got_prov = peq[ell as usize];
+        assert_eq!(got_prov, got_ver, "ell={}", ell);
+    }
+}
+
+#[test]
+fn verifier_vs_prover_arbitrary_u() {
+    // C++ test: VerifierVsProverForArbitraryU — transform correctness
+    let d = 5usize;
+    let r: Vec<Fr> = (0..d).map(|i| Fr::from((13 + i) as u64)).collect();
+    let u: Vec<Fr> = (0..d).map(|i| Fr::from((17 + 2 * i) as u64)).collect();
+
+    let v = VerifierEqPolynomial::<Bn254FrParams>::new(r.clone());
+    let ver_val = v.evaluate(&u);
+
+    // Prover-side normalized evaluation
+    let one = Fr::one();
+    let mut c = one;
+    for i in 0..d {
+        c = c * (one - r[i]);
+    }
+
+    // gamma_i = r_i / (1 - r_i)
+    let gamma: Vec<Fr> = r.iter().map(|&ri| ri * (one - ri).invert()).collect();
+
+    let mut prov_val = one;
+    for i in 0..d {
+        prov_val = prov_val * (one + u[i] * (gamma[i] - one));
+    }
+    prov_val = c * prov_val;
+
+    assert_eq!(ver_val, prov_val);
+}
+
+#[test]
+fn eq_partial_evaluation_consistency() {
+    // C++ test: PartialEvaluationConsistency — d=21, sumcheck-style incremental eval
+    let d = 21usize;
+    let r: Vec<Fr> = (0..d).map(|_| Fr::random_element()).collect();
+    let u: Vec<Fr> = (0..d).map(|_| Fr::random_element()).collect();
+    let mut u_part = vec![Fr::zero(); d];
+
+    let mut current_element = VerifierEqPolynomial::<Bn254FrParams>::eval(&r, &u_part);
+    let _pol = ProverEqPolynomial::construct(&r, d);
+
+    for i in 0..d {
+        u_part[i] = Fr::one();
+        let new_element = VerifierEqPolynomial::<Bn254FrParams>::eval(&r, &u_part);
+        current_element = current_element + u[i] * (new_element - current_element);
+        u_part[i] = u[i];
+        assert_eq!(
+            current_element,
+            VerifierEqPolynomial::<Bn254FrParams>::eval(&r, &u_part)
+        );
+    }
+    assert_eq!(
+        current_element,
+        VerifierEqPolynomial::<Bn254FrParams>::eval(&r, &u)
+    );
+}
+
+#[test]
+fn compute_subset_products_powers() {
+    // C++ test: GateSeparatorBetaProductsOnPowers — {2,4,16} → {1,2,4,8,16,32,64,128}
+    let betas = vec![Fr::from(2u64), Fr::from(4u64), Fr::from(16u64)];
+    let result = ProverEqPolynomial::compute_subset_products(&betas, 3, Fr::one());
+
+    let expected: Vec<Fr> = vec![
+        Fr::from(1u64),
+        Fr::from(2u64),
+        Fr::from(4u64),
+        Fr::from(8u64),
+        Fr::from(16u64),
+        Fr::from(32u64),
+        Fr::from(64u64),
+        Fr::from(128u64),
+    ];
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn prover_eq_all_ones() {
+    // C++ test: ProverEqAllChallengesAreOnes — d=6, only mask=63 is nonzero
+    let d = 6usize;
+    let n = 1usize << d;
+    let r = vec![Fr::one(); d];
+
+    let coeffs = ProverEqPolynomial::construct(&r, d);
+    assert_eq!(coeffs.len(), n);
+
+    let all_ones_mask = n - 1;
+    for m in 0..n {
+        let got = coeffs[m];
+        let expect = if m == all_ones_mask { Fr::one() } else { Fr::zero() };
+        assert_eq!(got, expect, "mask={}", m);
+    }
+}
+
+#[test]
+fn prover_eq_some_ones() {
+    // C++ test: ProverEqSomeChallengesAreOnes — d=5, r={7,1,9,1,11}, forced bits property
+    let d = 5usize;
+    let n = 1usize << d;
+    let r = vec![
+        Fr::from(7u64),
+        Fr::one(),
+        Fr::from(9u64),
+        Fr::one(),
+        Fr::from(11u64),
+    ];
+    let forced: Vec<usize> = vec![1, 3]; // indices where r_i == 1
+
+    let coeffs = ProverEqPolynomial::construct(&r, d);
+    assert_eq!(coeffs.len(), n);
+
+    let verifier = VerifierEqPolynomial::<Bn254FrParams>::new(r);
+
+    for mask in 0..(n as u64) {
+        let u = bool_vec_from_mask(d, mask);
+        let verifier_val = verifier.evaluate(&u);
+
+        let has_all_forced = forced.iter().all(|&bit| ((mask >> bit) & 1) != 0);
+        let table_val = coeffs[mask as usize];
+
+        if !has_all_forced {
+            assert_eq!(table_val, Fr::zero(), "mask missing forced bits, mask={}", mask);
+        } else {
+            assert_eq!(table_val, verifier_val, "mask={}", mask);
+        }
+    }
 }
