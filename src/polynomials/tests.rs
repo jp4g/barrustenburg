@@ -436,3 +436,344 @@ fn univariate_evaluate_at_point() {
     assert_eq!(u.evaluate(Fr::from(0u64)), Fr::from(1u64));
     assert_eq!(u.evaluate(Fr::from(1u64)), Fr::from(3u64));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// batch_invert test
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn batch_invert() {
+    let mut elements: Vec<Fr> = (1..=8).map(|i| Fr::from(i as u64)).collect();
+    let originals = elements.clone();
+    Fr::batch_invert(&mut elements);
+    // Each element should now be the inverse of the original
+    for i in 0..elements.len() {
+        assert_eq!(elements[i] * originals[i], Fr::one());
+    }
+    // Test with zeros in the mix
+    let mut with_zeros = vec![Fr::from(3u64), Fr::zero(), Fr::from(7u64), Fr::zero(), Fr::from(11u64)];
+    let orig_with_zeros = with_zeros.clone();
+    Fr::batch_invert(&mut with_zeros);
+    assert_eq!(with_zeros[0] * orig_with_zeros[0], Fr::one());
+    assert!(with_zeros[1].is_zero()); // zero stays zero
+    assert_eq!(with_zeros[2] * orig_with_zeros[2], Fr::one());
+    assert!(with_zeros[3].is_zero()); // zero stays zero
+    assert_eq!(with_zeros[4] * orig_with_zeros[4], Fr::one());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FFT / IFFT / Coset tests (from polynomial_arithmetic.test.cpp)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn fft_with_small_degree() {
+    // C++ test: fft_with_small_degree — FFT[i] == evaluate(poly, ω^i) for all i
+    let n = 16usize;
+    let poly: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+    let mut fft_transform = poly.clone();
+
+    let mut domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(n);
+    domain.compute_lookup_table();
+    polynomial_arithmetic::fft(&mut fft_transform, &domain);
+
+    let mut work_root = Fr::one();
+    for i in 0..n {
+        let expected = polynomial_arithmetic::evaluate(&poly, &work_root);
+        assert_eq!(fft_transform[i], expected, "mismatch at index {}", i);
+        work_root = work_root * domain.root;
+    }
+}
+
+#[test]
+fn split_polynomial_fft() {
+    // C++ test: split_polynomial_fft — split FFT matches monolithic FFT
+    let n = 256usize;
+    let poly: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+
+    let mut fft_mono = poly.clone();
+
+    // Split into 4 sub-arrays: poly_split[j] = poly[j*poly_size..(j+1)*poly_size]
+    let num_poly = 4usize;
+    let poly_size = n / num_poly;
+    let mut split_data: Vec<Vec<Fr>> = (0..num_poly)
+        .map(|j| poly[j * poly_size..(j + 1) * poly_size].to_vec())
+        .collect();
+
+    let mut domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(n);
+    domain.compute_lookup_table();
+
+    polynomial_arithmetic::fft(&mut fft_mono, &domain);
+
+    {
+        let mut split_refs: Vec<&mut [Fr]> = split_data.iter_mut().map(|v| v.as_mut_slice()).collect();
+        polynomial_arithmetic::fft_split(&mut split_refs, &domain);
+    }
+
+    // Verify split matches monolithic
+    for i in 0..n {
+        let poly_idx = i / poly_size;
+        let elem_idx = i % poly_size;
+        assert_eq!(
+            split_data[poly_idx][elem_idx], fft_mono[i],
+            "split FFT mismatch at index {}",
+            i
+        );
+    }
+
+    // Also verify monolithic matches direct evaluation
+    let mut work_root = Fr::one();
+    for i in 0..n {
+        let expected = polynomial_arithmetic::evaluate(&poly, &work_root);
+        assert_eq!(fft_mono[i], expected, "FFT vs evaluate mismatch at {}", i);
+        work_root = work_root * domain.root;
+    }
+}
+
+#[test]
+fn fft_ifft_roundtrip_large() {
+    // C++ test: basic_fft — FFT→IFFT recovers original (n = 2^14)
+    let n = 1 << 14;
+    let original: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+    let mut result = original.clone();
+
+    let mut domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(n);
+    domain.compute_lookup_table();
+
+    polynomial_arithmetic::fft(&mut result, &domain);
+    polynomial_arithmetic::ifft(&mut result, &domain);
+
+    for i in 0..n {
+        assert_eq!(result[i], original[i], "roundtrip mismatch at index {}", i);
+    }
+}
+
+#[test]
+fn fft_ifft_consistency() {
+    // C++ test: fft_ifft_consistency — FFT→IFFT roundtrip (n = 256)
+    let n = 256usize;
+    let original: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+    let mut result = original.clone();
+
+    let mut domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(n);
+    domain.compute_lookup_table();
+
+    polynomial_arithmetic::fft(&mut result, &domain);
+    polynomial_arithmetic::ifft(&mut result, &domain);
+
+    for i in 0..n {
+        assert_eq!(result[i], original[i], "mismatch at index {}", i);
+    }
+}
+
+#[test]
+fn split_polynomial_fft_ifft_consistency() {
+    // C++ test: split_polynomial_fft_ifft_consistency
+    let num_poly = 4usize;
+    let poly_size = 256usize;
+    let n = num_poly * poly_size;
+
+    let mut split_data: Vec<Vec<Fr>> = (0..num_poly)
+        .map(|_| (0..poly_size).map(|_| Fr::random_element()).collect())
+        .collect();
+    let original: Vec<Vec<Fr>> = split_data.clone();
+
+    let mut domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(n);
+    domain.compute_lookup_table();
+
+    {
+        let mut split_refs: Vec<&mut [Fr]> = split_data.iter_mut().map(|v| v.as_mut_slice()).collect();
+        polynomial_arithmetic::fft_split(&mut split_refs, &domain);
+        polynomial_arithmetic::ifft_split(&mut split_refs, &domain);
+    }
+
+    for j in 0..num_poly {
+        for i in 0..poly_size {
+            assert_eq!(
+                split_data[j][i], original[j][i],
+                "split roundtrip mismatch at poly {}, index {}",
+                j, i
+            );
+        }
+    }
+}
+
+#[test]
+fn fft_coset_ifft_consistency() {
+    // C++ test: fft_coset_ifft_consistency — coset_fft→coset_ifft roundtrip
+    let n = 256usize;
+    let original: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+    let mut result = original.clone();
+
+    let mut domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(n);
+    domain.compute_lookup_table();
+
+    // Verify generator * generator_inverse == 1
+    assert_eq!(domain.generator * domain.generator_inverse, Fr::one());
+
+    polynomial_arithmetic::coset_fft(&mut result, &domain);
+    polynomial_arithmetic::coset_ifft(&mut result, &domain);
+
+    for i in 0..n {
+        assert_eq!(result[i], original[i], "coset roundtrip mismatch at index {}", i);
+    }
+}
+
+#[test]
+fn split_polynomial_fft_coset_ifft_consistency() {
+    // C++ test: split_polynomial_fft_coset_ifft_consistency
+    let num_poly = 4usize;
+    let poly_size = 256usize;
+    let n = num_poly * poly_size;
+
+    let mut split_data: Vec<Vec<Fr>> = (0..num_poly)
+        .map(|_| (0..poly_size).map(|_| Fr::random_element()).collect())
+        .collect();
+    let original: Vec<Vec<Fr>> = split_data.clone();
+
+    let mut domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(n);
+    domain.compute_lookup_table();
+
+    {
+        let mut split_refs: Vec<&mut [Fr]> = split_data.iter_mut().map(|v| v.as_mut_slice()).collect();
+        polynomial_arithmetic::coset_fft_split(&mut split_refs, &domain);
+        polynomial_arithmetic::coset_ifft_split(&mut split_refs, &domain);
+    }
+
+    for j in 0..num_poly {
+        for i in 0..poly_size {
+            assert_eq!(
+                split_data[j][i], original[j][i],
+                "split coset roundtrip mismatch at poly {}, index {}",
+                j, i
+            );
+        }
+    }
+}
+
+#[test]
+fn fft_coset_ifft_cross_consistency() {
+    // C++ test: fft_coset_ifft_cross_consistency
+    // 3 polys of sizes n, 2n, 4n. Zero-pad all to 4n, coset-fft each, sum, coset-ifft.
+    let n = 2usize;
+
+    // poly_a/b/c all have same first n coefficients; higher coefficients are zero
+    let base: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+    let expected: Vec<Fr> = (0..n)
+        .map(|i| base[i] + base[i] + base[i])
+        .collect();
+
+    let mut poly_a = vec![Fr::zero(); 4 * n];
+    let mut poly_b = vec![Fr::zero(); 4 * n];
+    let mut poly_c = vec![Fr::zero(); 4 * n];
+    for i in 0..n {
+        poly_a[i] = base[i];
+        poly_b[i] = base[i];
+        poly_c[i] = base[i];
+    }
+
+    let mut small_domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(n);
+    let mut mid_domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(2 * n);
+    let mut large_domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(4 * n);
+    small_domain.compute_lookup_table();
+    mid_domain.compute_lookup_table();
+    large_domain.compute_lookup_table();
+
+    // C++ applies coset_fft with the small/mid/large domain respectively,
+    // but only the first domain.size elements are actually used.
+    polynomial_arithmetic::coset_fft(&mut poly_a[..small_domain.size], &small_domain);
+    polynomial_arithmetic::coset_fft(&mut poly_b[..mid_domain.size], &mid_domain);
+    polynomial_arithmetic::coset_fft(&mut poly_c[..large_domain.size], &large_domain);
+
+    // Sum at matching evaluation points:
+    // small domain has n points, mid has 2n, large has 4n
+    // We sum poly_a[i] + poly_b[2*i] + poly_c[4*i] for i in 0..n
+    for i in 0..n {
+        poly_a[i] = poly_a[i] + poly_c[4 * i];
+        poly_a[i] = poly_a[i] + poly_b[2 * i];
+    }
+
+    polynomial_arithmetic::coset_ifft(&mut poly_a[..small_domain.size], &small_domain);
+
+    for i in 0..n {
+        assert_eq!(poly_a[i], expected[i], "cross-consistency mismatch at index {}", i);
+    }
+}
+
+#[test]
+fn barycentric_weight_evaluations() {
+    // C++ test: barycentric_weight_evaluations
+    let n = 16usize;
+
+    let mut domain: EvaluationDomain<Bn254FrParams> = EvaluationDomain::new(n);
+
+    let mut poly: Vec<Fr> = (0..n / 2).map(|_| Fr::random_element()).collect();
+    let barycentric_poly = poly.clone();
+
+    // Pad to n with zeros
+    poly.resize(n, Fr::zero());
+
+    // evaluation_point = 2 (in Montgomery form)
+    let evaluation_point = Fr::from(2u64);
+
+    // Barycentric evaluation using only the first n/2 evaluations
+    let result = polynomial_arithmetic::compute_barycentric_evaluation(
+        &barycentric_poly,
+        &domain,
+        &evaluation_point,
+    );
+
+    domain.compute_lookup_table();
+
+    // IFFT to get coefficient form, then evaluate with Horner
+    polynomial_arithmetic::ifft(&mut poly, &domain);
+    let expected = polynomial_arithmetic::evaluate(&poly, &evaluation_point);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn linear_poly_product() {
+    // C++ test: linear_poly_product
+    let n = 64usize;
+    let roots: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+
+    let z = Fr::random_element();
+    let mut expected = Fr::one();
+    for i in 0..n {
+        expected = expected * (z - roots[i]);
+    }
+
+    let dest = polynomial_arithmetic::compute_linear_polynomial_product(&roots);
+    let result = polynomial_arithmetic::evaluate(&dest, &z);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn split_polynomial_evaluate() {
+    // C++ test: split_polynomial_evaluate — chunked evaluate matches full evaluate
+    let n = 256usize;
+    let poly: Vec<Fr> = (0..n).map(|_| Fr::random_element()).collect();
+
+    let num_poly = 4usize;
+    let poly_size = n / num_poly;
+    let split_data: Vec<Vec<Fr>> = (0..num_poly)
+        .map(|j| poly[j * poly_size..(j + 1) * poly_size].to_vec())
+        .collect();
+
+    let z = Fr::random_element();
+
+    // Evaluate full polynomial
+    let expected = polynomial_arithmetic::evaluate(&poly, &z);
+
+    // Evaluate split: p(z) = p0(z) + z^{poly_size} * p1(z) + z^{2*poly_size} * p2(z) + ...
+    let mut z_pow = Fr::one();
+    let z_n = z.pow(&[poly_size as u64, 0, 0, 0]);
+    let mut result = Fr::zero();
+    for j in 0..num_poly {
+        result = result + polynomial_arithmetic::evaluate(&split_data[j], &z) * z_pow;
+        z_pow = z_pow * z_n;
+    }
+
+    assert_eq!(result, expected);
+}

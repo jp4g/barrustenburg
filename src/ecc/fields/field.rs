@@ -979,6 +979,41 @@ impl<P: FieldParams> Field<P> {
         (reduced.data[limb_idx] >> bit_idx) & 1 == 1
     }
 
+    /// Montgomery's batch inversion trick: invert all elements using a single
+    /// field inversion + O(n) multiplications. Zero elements are left as zero.
+    pub fn batch_invert(elements: &mut [Field<P>]) {
+        let n = elements.len();
+        if n == 0 {
+            return;
+        }
+
+        let mut temporaries = vec![Field::<P>::zero(); n];
+        let mut skipped = vec![false; n];
+
+        // Forward pass: accumulate partial products
+        let mut accumulator = Field::<P>::one();
+        for i in 0..n {
+            temporaries[i] = accumulator;
+            if elements[i].is_zero() {
+                skipped[i] = true;
+            } else {
+                accumulator = accumulator.montgomery_mul(&elements[i]);
+            }
+        }
+
+        // Single inversion of the accumulated product
+        accumulator = accumulator.invert();
+
+        // Backward pass: extract individual inverses
+        for i in (0..n).rev() {
+            if !skipped[i] {
+                let t0 = accumulator.montgomery_mul(&temporaries[i]);
+                accumulator = accumulator.montgomery_mul(&elements[i]);
+                elements[i] = t0;
+            }
+        }
+    }
+
     /// Split scalar k into (k1, k2) via GLV endomorphism: k ≡ k1 + k2·λ (mod p).
     /// Returns two 128-bit half-scalars as ([u64; 2], [u64; 2]).
     ///
