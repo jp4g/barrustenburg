@@ -14,7 +14,7 @@ pub mod kzg;
 pub mod gemini;
 pub mod ipa;
 pub mod shplonk;
-pub mod small_subgroup_ipa {}
+pub mod small_subgroup_ipa;
 
 #[cfg(test)]
 mod tests;
