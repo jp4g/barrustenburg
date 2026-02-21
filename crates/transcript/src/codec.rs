@@ -286,12 +286,12 @@ fn limbs_add_shifted(lo: &[u64; 4], hi: &[u64; 4], shift: u32) -> [u64; 4] {
     } else {
         for i in 0..4 {
             let shifted_lo = hi[i] << bit_offset;
-            let shifted_hi = if bit_offset > 0 && i > 0 {
+            let carry_in = if i > 0 {
                 hi[i - 1] >> (64 - bit_offset)
             } else {
                 0
             };
-            let val = shifted_lo | shifted_hi;
+            let val = shifted_lo | carry_in;
 
             if i + limb_offset < 4 {
                 let (sum, carry) = result[i + limb_offset].overflowing_add(val);
@@ -305,25 +305,6 @@ fn limbs_add_shifted(lo: &[u64; 4], hi: &[u64; 4], shift: u32) -> [u64; 4] {
                             break;
                         }
                         j += 1;
-                    }
-                }
-            }
-            // Handle the spill from bit_offset into the next limb
-            if bit_offset > 0 && i + limb_offset + 1 < 4 {
-                let spill = hi[i] >> (64 - bit_offset);
-                if spill > 0 {
-                    let (sum, carry) = result[i + limb_offset + 1].overflowing_add(spill);
-                    result[i + limb_offset + 1] = sum;
-                    if carry {
-                        let mut j = i + limb_offset + 2;
-                        while j < 4 {
-                            let (s, c) = result[j].overflowing_add(1);
-                            result[j] = s;
-                            if !c {
-                                break;
-                            }
-                            j += 1;
-                        }
                     }
                 }
             }

@@ -10,8 +10,7 @@ pub mod pairing_points;
 pub mod batch_mul;
 pub mod claim_batcher;
 
-// Stub modules — not yet implemented
-pub mod kzg {}
+pub mod kzg;
 pub mod ipa {}
 pub mod gemini {}
 pub mod shplonk {}
