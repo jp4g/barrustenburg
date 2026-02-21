@@ -1,0 +1,15 @@
+[package]
+name = "bbrs-ultra-honk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bbrs-ecc = { path = "../ecc" }
+bbrs-polynomials = { path = "../polynomials" }
+bbrs-relations = { path = "../relations" }
+bbrs-flavor = { path = "../flavor" }
+bbrs-honk = { path = "../honk" }
+bbrs-sumcheck = { path = "../sumcheck" }
+bbrs-commitment-schemes = { path = "../commitment_schemes" }
+bbrs-transcript = { path = "../transcript" }
+bbrs-srs = { path = "../srs" }
