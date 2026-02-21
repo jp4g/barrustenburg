@@ -247,6 +247,18 @@ impl<H: TranscriptHasher> BaseTranscript<H> {
         self.proof_start
     }
 
+    /// Add an element to the hash buffer without writing to the proof data.
+    ///
+    /// Used when both prover and verifier already know the element (e.g.,
+    /// commitment and opening pair in IPA). The element influences
+    /// Fiat-Shamir challenges but is not part of the transmitted proof.
+    ///
+    /// Port of C++ `add_to_hash_buffer`.
+    pub fn add_to_hash_buffer<T: FieldSerializable>(&mut self, label: &str, element: &T) {
+        let element_frs = element.serialize_to_frs();
+        self.add_element_frs_to_hash_buffer(label, &element_frs);
+    }
+
     // --- Internal methods ---
 
     /// Add element field representations to the hash buffer and manifest.
