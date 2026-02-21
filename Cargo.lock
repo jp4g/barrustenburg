@@ -88,6 +88,7 @@ dependencies = [
 name = "bbrs-relations"
 version = "0.1.0"
 dependencies = [
+ "bbrs-crypto",
  "bbrs-ecc",
  "bbrs-polynomials",
 ]

@@ -1,6 +1,7 @@
 pub mod nested_containers;
 pub mod relation_parameters;
 pub mod relation_types;
+pub mod ultra;
 pub mod utils;
 
 // Re-exports for convenience

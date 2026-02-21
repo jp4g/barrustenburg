@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 bbrs-ecc = { path = "../ecc" }
 bbrs-polynomials = { path = "../polynomials" }
+bbrs-crypto = { path = "../crypto" }
