@@ -1,0 +1,8 @@
+[package]
+name = "bbrs-relations"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bbrs-ecc = { path = "../ecc" }
+bbrs-polynomials = { path = "../polynomials" }
