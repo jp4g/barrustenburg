@@ -318,6 +318,13 @@ impl<P: FieldParams, const N: usize> PartialEq for Univariate<P, N> {
 
 impl<P: FieldParams, const N: usize> Eq for Univariate<P, N> {}
 
+impl<P: FieldParams, const N: usize> Default for Univariate<P, N> {
+    #[inline]
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pointwise arithmetic trait impls: Univariate op Univariate
 // ---------------------------------------------------------------------------

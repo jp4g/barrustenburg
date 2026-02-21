@@ -85,6 +85,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bbrs-relations"
+version = "0.1.0"
+dependencies = [
+ "bbrs-crypto",
+ "bbrs-ecc",
+ "bbrs-polynomials",
+]
+
+[[package]]
 name = "bbrs-srs"
 version = "0.1.0"
 dependencies = [
