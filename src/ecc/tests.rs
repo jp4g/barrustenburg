@@ -704,7 +704,13 @@ fn secp256r1_fq_mul3_vs_add3() {
     let via_add = x_sq + x_sq + x_sq;
     eprintln!("x_sq * 3:     {:?}", via_mul);
     eprintln!("x_sq+x_sq+sq: {:?}", via_add);
+    eprintln!("mul raw: [{:#018x}, {:#018x}, {:#018x}, {:#018x}]", via_mul.data[0], via_mul.data[1], via_mul.data[2], via_mul.data[3]);
+    eprintln!("add raw: [{:#018x}, {:#018x}, {:#018x}, {:#018x}]", via_add.data[0], via_add.data[1], via_add.data[2], via_add.data[3]);
     assert_eq!(via_mul, via_add, "multiplying by 3 should equal adding three times");
+    // Also check raw equality
+    if via_mul.data != via_add.data {
+        eprintln!("WARNING: same field element, different raw representation!");
+    }
 }
 
 #[test]

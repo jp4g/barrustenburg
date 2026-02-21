@@ -103,6 +103,28 @@ impl<C: CurveParams> AffineElement<C> {
         result
     }
 
+    /// Try to construct a point from an x-coordinate and a sign bit.
+    ///
+    /// Computes y^2 = x^3 + a*x + b, attempts sqrt. Returns `None` if
+    /// the value is not a quadratic residue (no valid point).
+    /// The sign_bit selects which of the two square roots to use:
+    /// if the LSB of reduced y doesn't match sign_bit, y is negated.
+    pub fn from_x_coordinate(x: BaseField<C>, sign_bit: bool) -> Option<Self> {
+        let mut yy = x.sqr() * x + C::coeff_b();
+        if C::HAS_A {
+            yy = yy + (x * C::coeff_a());
+        }
+        let (found_root, y) = yy.sqrt();
+        if found_root {
+            let y_reduced = y.from_montgomery_form();
+            let y_parity = y_reduced.data[0] & 1 == 1;
+            let y = if y_parity != sign_bit { -y } else { y };
+            Some(Self::new(x, y))
+        } else {
+            None
+        }
+    }
+
     /// Check if the point lies on the curve: y^2 == x^3 + a*x + b.
     pub fn on_curve(&self) -> bool {
         if self.is_point_at_infinity() {

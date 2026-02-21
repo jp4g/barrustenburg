@@ -906,6 +906,34 @@ impl<P: FieldParams> Field<P> {
     pub fn cube_root_of_unity() -> Self {
         Self::from_raw(P::CUBE_ROOT)
     }
+
+    /// Reduce a 512-bit value (lo || hi) modulo the field modulus.
+    ///
+    /// Used by hash-to-curve to map a 512-bit hash output into a field element,
+    /// ensuring negligible bias.
+    pub fn from_u512(lo: [u64; 4], hi: [u64; 4]) -> Self {
+        use crypto_bigint::{NonZero, U256, U512};
+
+        // Build the 512-bit value: val = (hi << 256) | lo
+        // Tuple order: (lower_half, upper_half)
+        let lo_256 = U256::from_words(lo);
+        let hi_256 = U256::from_words(hi);
+        let val = U512::from((lo_256, hi_256));
+
+        // Build modulus as U512 (modulus in lower half, zero in upper)
+        let modulus = U256::from_words(P::MODULUS);
+        let modulus_wide = U512::from((modulus, U256::ZERO));
+        let nz_mod = NonZero::new(modulus_wide).expect("modulus is nonzero");
+
+        // Compute val % modulus
+        let (_, remainder) = val.div_rem(&nz_mod);
+
+        // Extract low 256 bits (remainder < modulus < 2^256, so upper half is zero)
+        let words: [u64; 8] = remainder.to_words();
+        let limbs = [words[0], words[1], words[2], words[3]];
+
+        Self::from_limbs(limbs)
+    }
 }
 
 // ---------------------------------------------------------------------------
