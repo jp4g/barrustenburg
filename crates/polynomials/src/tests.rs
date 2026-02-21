@@ -20,18 +20,21 @@ type Fr = Field<Bn254FrParams>;
 #[test]
 fn polynomial_shifted() {
     let n = 8usize;
+    // shiftable(n) creates start_index=1, data at [1..n)
     let mut p: Polynomial<Bn254FrParams> = Polynomial::shiftable(n);
-    for i in 0..n {
+    for i in 1..n {
         *p.at_mut(i) = Fr::from((i + 1) as u64);
     }
+    assert_eq!(p.get(0), Fr::zero()); // virtual zero at index 0
+    assert_eq!(p.get(1), Fr::from(2u64));
+
     let s = p.shifted();
-    assert_eq!(s.start_index(), 1);
+    // shifted() decrements start: 1 -> 0, so s[i] = p[i+1]
+    assert_eq!(s.start_index(), 0);
     assert_eq!(s.size(), n - 1);
-    for i in 1..n {
-        assert_eq!(s.get(i), Fr::from((i + 1) as u64));
+    for i in 0..n - 1 {
+        assert_eq!(s.get(i), Fr::from((i + 2) as u64)); // s[i] = p[i+1]
     }
-    // Virtual zero outside range
-    assert_eq!(s.get(0), Fr::zero());
 }
 
 #[test]
