@@ -1,4 +1,7 @@
 use crate::fields::field::Field;
+use crate::fields::field2::Field2;
+use crate::fields::field6::Field6Params;
+use crate::fields::field12::Field12Params;
 use crate::fields::field_params::FieldParams;
 use crate::groups::curve_params::CurveParams;
 
@@ -169,3 +172,242 @@ impl CurveParams for Bn254G1Params {
 
 pub type G1Affine = crate::groups::affine_element::AffineElement<Bn254G1Params>;
 pub type G1Element = crate::groups::element::Element<Bn254G1Params>;
+
+// ---------------------------------------------------------------------------
+// Extension field type aliases
+// ---------------------------------------------------------------------------
+
+pub type Fq2 = Field2<Bn254FqParams>;
+pub type Fq6 = crate::fields::field6::Field6<Bn254FqParams>;
+pub type Fq12 = crate::fields::field12::Field12<Bn254FqParams>;
+
+// ---------------------------------------------------------------------------
+// Fq2 BN254-specific constants (from C++ fq2.hpp, __SIZEOF_INT128__ path)
+// ---------------------------------------------------------------------------
+
+impl Field2<Bn254FqParams> {
+    /// Twist coefficient b' for BN254 G2: b' = b / xi = 3 / (9 + u)
+    pub fn twist_coeff_b() -> Self {
+        Self::new(
+            Fq::from_raw([0x3bf938e377b802a8, 0x020b1b273633535d, 0x26b7edf049755260, 0x2514c6324384a86d]),
+            Fq::from_raw([0x38e7ecccd1dcff67, 0x65f0b37d93ce0d3e, 0xd749d0dd22ac00aa, 0x0141b9ce4a688d4d]),
+        )
+    }
+
+    /// Frobenius twist constant for G2 x-coordinate (mul_by_q).
+    pub fn twist_mul_by_q_x() -> Self {
+        Self::new(
+            Fq::from_raw([0xb5773b104563ab30, 0x347f91c8a9aa6454, 0x7a007127242e0991, 0x1956bcd8118214ec]),
+            Fq::from_raw([0x6e849f1ea0aa4757, 0xaa1c7b6d89f89141, 0xb6e713cdfae0ca3a, 0x26694fbb4e82ebc3]),
+        )
+    }
+
+    /// Frobenius twist constant for G2 y-coordinate (mul_by_q).
+    pub fn twist_mul_by_q_y() -> Self {
+        Self::new(
+            Fq::from_raw([0xe4bbdd0c2936b629, 0xbb30f162e133bacb, 0x31a9d1b6f9645366, 0x253570bea500f8dd]),
+            Fq::from_raw([0xa1d77ce45ffe77c7, 0x07affd117826d1db, 0x6d16bd27bb7edc6b, 0x2c87200285defecc]),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fq6 parameters for BN254 (from C++ fq6.hpp, __SIZEOF_INT128__ path)
+// ---------------------------------------------------------------------------
+
+impl Field6Params for Bn254FqParams {
+    /// Multiply Fq2 element by non-residue xi = 9 + u.
+    /// (a0 + a1*u)(9 + u) = (9*a0 - a1) + (9*a1 + a0)*u
+    fn mul_by_non_residue(a: &Field2<Self>) -> Field2<Self> {
+        let mut t0 = a.c0 + a.c0; // 2*a0
+        t0 = t0 + t0;              // 4*a0
+        t0 = t0 + t0;              // 8*a0
+        t0 = t0 + a.c0;            // 9*a0
+        let mut t1 = a.c1 + a.c1; // 2*a1
+        t1 = t1 + t1;              // 4*a1
+        t1 = t1 + t1;              // 8*a1
+        t1 = t1 + a.c1;            // 9*a1
+        Field2::new(t0 - a.c1, t1 + a.c0)
+    }
+
+    fn frobenius_coeffs_c1_1() -> Field2<Self> {
+        Field2::new(
+            Fq::from_raw([0xb5773b104563ab30, 0x347f91c8a9aa6454, 0x7a007127242e0991, 0x1956bcd8118214ec]),
+            Fq::from_raw([0x6e849f1ea0aa4757, 0xaa1c7b6d89f89141, 0xb6e713cdfae0ca3a, 0x26694fbb4e82ebc3]),
+        )
+    }
+
+    fn frobenius_coeffs_c1_2() -> Field2<Self> {
+        Field2::new(
+            Fq::from_raw([0x3350c88e13e80b9c, 0x7dce557cdb5e56b9, 0x6001b4b8b615564a, 0x2682e617020217e0]),
+            Fq::zero(),
+        )
+    }
+
+    fn frobenius_coeffs_c1_3() -> Field2<Self> {
+        Field2::new(
+            Fq::from_raw([0xc9af22f716ad6bad, 0xb311782a4aa662b2, 0x19eeaf64e248c7f4, 0x20273e77e3439f82]),
+            Fq::from_raw([0xacc02860f7ce93ac, 0x3933d5817ba76b4c, 0x69e6188b446c8467, 0x0a46036d4417cc55]),
+        )
+    }
+
+    fn frobenius_coeffs_c2_1() -> Field2<Self> {
+        Field2::new(
+            Fq::from_raw([0x7361d77f843abe92, 0xa5bb2bd3273411fb, 0x9c941f314b3e2399, 0x15df9cddbb9fd3ec]),
+            Fq::from_raw([0x5dddfd154bd8c949, 0x62cb29a5a4445b60, 0x37bc870a0c7dd2b9, 0x24830a9d3171f0fd]),
+        )
+    }
+
+    fn frobenius_coeffs_c2_2() -> Field2<Self> {
+        Field2::new(
+            Fq::from_raw([0x71930c11d782e155, 0xa6bb947cffbe3323, 0xaa303344d4741444, 0x2c3b3f0d26594943]),
+            Fq::zero(),
+        )
+    }
+
+    fn frobenius_coeffs_c2_3() -> Field2<Self> {
+        Field2::new(
+            Fq::from_raw([0x448a93a57b6762df, 0xbfd62df528fdeadf, 0xd858f5d00e9bd47a, 0x06b03d4d3476ec58]),
+            Fq::from_raw([0x2b19daf4bcc936d1, 0xa1a54e7a56f4299f, 0xb533eee05adeaef1, 0x170c812b84dda0b2]),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fq12 parameters for BN254 (from C++ fq12.hpp, __SIZEOF_INT128__ path)
+// ---------------------------------------------------------------------------
+
+impl Field12Params for Bn254FqParams {
+    fn frobenius_coefficients_1() -> Field2<Self> {
+        Field2::new(
+            Fq::from_raw([0xaf9ba69633144907, 0xca6b1d7387afb78a, 0x11bded5ef08a2087, 0x02f34d751a1f3a7c]),
+            Fq::from_raw([0xa222ae234c492d72, 0xd00f02a4565de15b, 0xdc2ff3a253dfc926, 0x10a75716b3899551]),
+        )
+    }
+
+    fn frobenius_coefficients_2() -> Field2<Self> {
+        Field2::new(
+            Fq::from_raw([0xca8d800500fa1bf2, 0xf0c5d61468b39769, 0x0e201271ad0d4418, 0x04290f65bad856e6]),
+            Fq::zero(),
+        )
+    }
+
+    fn frobenius_coefficients_3() -> Field2<Self> {
+        Field2::new(
+            Fq::from_raw([0x365316184e46d97d, 0x0af7129ed4c96d9f, 0x659da72fca1009b5, 0x08116d8983a20d23]),
+            Fq::from_raw([0xb1df4af7c39c1939, 0x3d9f02878a73bf7f, 0x9b2220928caf0ae0, 0x26684515eff054a6]),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BN254 G2 types (over Fq2)
+// ---------------------------------------------------------------------------
+
+/// BN254 G2 point in Jacobian projective coordinates over Fq2.
+pub struct G2Element {
+    pub x: Fq2,
+    pub y: Fq2,
+    pub z: Fq2,
+}
+
+impl Clone for G2Element {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self { x: self.x, y: self.y, z: self.z }
+    }
+}
+
+impl Copy for G2Element {}
+
+impl std::fmt::Debug for G2Element {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "G2Element({:?}, {:?}, {:?})", self.x, self.y, self.z)
+    }
+}
+
+/// BN254 G2 point in affine coordinates over Fq2.
+pub struct G2AffineElement {
+    pub x: Fq2,
+    pub y: Fq2,
+}
+
+impl Clone for G2AffineElement {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self { x: self.x, y: self.y }
+    }
+}
+
+impl Copy for G2AffineElement {}
+
+impl std::fmt::Debug for G2AffineElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "G2AffineElement({:?}, {:?})", self.x, self.y)
+    }
+}
+
+impl G2Element {
+    #[inline]
+    pub fn new(x: Fq2, y: Fq2, z: Fq2) -> Self {
+        Self { x, y, z }
+    }
+
+    pub fn from_affine(aff: &G2AffineElement) -> Self {
+        if aff.is_point_at_infinity() {
+            return Self::infinity();
+        }
+        Self::new(aff.x, aff.y, Fq2::one())
+    }
+
+    pub fn infinity() -> Self {
+        let mut r = Self::new(Fq2::zero(), Fq2::zero(), Fq2::zero());
+        r.x.c0.self_set_msb();
+        r
+    }
+
+    #[inline]
+    pub fn is_point_at_infinity(&self) -> bool {
+        self.x.c0.is_msb_set()
+    }
+}
+
+impl std::ops::Neg for G2Element {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        Self::new(self.x, -self.y, self.z)
+    }
+}
+
+impl G2AffineElement {
+    #[inline]
+    pub fn new(x: Fq2, y: Fq2) -> Self {
+        Self { x, y }
+    }
+
+    pub fn infinity() -> Self {
+        let mut r = Self::new(Fq2::zero(), Fq2::zero());
+        r.x.c0.self_set_msb();
+        r
+    }
+
+    #[inline]
+    pub fn is_point_at_infinity(&self) -> bool {
+        self.x.c0.is_msb_set()
+    }
+
+    /// BN254 G2 generator (from C++ g2.hpp, __SIZEOF_INT128__ path).
+    pub fn generator() -> Self {
+        Self::new(
+            Fq2::new(
+                Fq::from_raw([0x8e83b5d102bc2026, 0xdceb1935497b0172, 0xfbb8264797811adf, 0x19573841af96503b]),
+                Fq::from_raw([0xafb4737da84c6140, 0x6043dd5a5802d8c4, 0x09e950fc52a02f86, 0x14fef0833aea7b6b]),
+            ),
+            Fq2::new(
+                Fq::from_raw([0x619dfa9d886be9f6, 0xfe7fd297f59e9b78, 0xff9e1a62231b7dfe, 0x28fd7eebae9e4206]),
+                Fq::from_raw([0x64095b56c71856ee, 0xdc57f922327d3cbb, 0x55f935be33351076, 0x0da4a0e693fd6482]),
+            ),
+        )
+    }
+}
