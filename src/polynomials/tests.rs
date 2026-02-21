@@ -3,10 +3,13 @@ use crate::ecc::fields::field::Field;
 use crate::polynomials::barycentric::BarycentricData;
 use crate::polynomials::eq_polynomial::{ProverEqPolynomial, VerifierEqPolynomial};
 use crate::polynomials::evaluation_domain::EvaluationDomain;
+use crate::polynomials::gate_separator::GateSeparatorPolynomial;
 use crate::polynomials::polynomial::Polynomial;
 use crate::polynomials::polynomial_arithmetic;
 use crate::polynomials::polynomial_span::PolynomialSpan;
+use crate::polynomials::row_disabling_polynomial::RowDisablingPolynomial;
 use crate::polynomials::univariate::{Univariate, UnivariateView};
+use crate::polynomials::univariate_coefficient_basis::UnivariateCoefficientBasis;
 
 type Fr = Field<Bn254FrParams>;
 
@@ -1206,4 +1209,239 @@ fn prover_eq_some_ones() {
             assert_eq!(table_val, verifier_val, "mask={}", mask);
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GateSeparatorPolynomial tests (from gate_separator.test.cpp)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn gate_separator_full_pow_consistency() {
+    // C++ test: FullPowConsistency — d=5 random betas/variables; after each
+    // partially_evaluate, check partial_evaluation_result == prod_k (1-u_k + u_k*beta_k)
+    let d = 5;
+    let betas: Vec<Fr> = (0..d).map(|_| Fr::random_element()).collect();
+    let variables: Vec<Fr> = (0..d).map(|_| Fr::random_element()).collect();
+
+    let mut poly = GateSeparatorPolynomial::<Bn254FrParams>::new_verifier(betas.clone());
+
+    let mut expected_eval = Fr::one();
+    for i in 0..d {
+        poly.partially_evaluate(variables[i]);
+        expected_eval = expected_eval * (Fr::one() - variables[i] + variables[i] * betas[i]);
+        assert_eq!(poly.partial_evaluation_result, expected_eval);
+    }
+}
+
+#[test]
+fn gate_separator_on_powers() {
+    // C++ test: GateSeparatorPolynomialsOnPowers
+    // betas=[2,4,16], log=3 → beta_products==[1,2,4,8,16,32,64,128]
+    let betas = vec![Fr::from(2u64), Fr::from(4u64), Fr::from(16u64)];
+    let poly = GateSeparatorPolynomial::<Bn254FrParams>::new(betas, 3);
+    let expected: Vec<Fr> = vec![
+        Fr::from(1u64),
+        Fr::from(2u64),
+        Fr::from(4u64),
+        Fr::from(8u64),
+        Fr::from(16u64),
+        Fr::from(32u64),
+        Fr::from(64u64),
+        Fr::from(128u64),
+    ];
+    assert_eq!(poly.beta_products, expected);
+}
+
+#[test]
+fn gate_separator_random_betas() {
+    // C++ test: GateSeparatorPolynomialsOnPowersWithDifferentBeta
+    // d=5 random betas; verify each beta_products[i] == product of betas[j] for set bits j in i
+    let d = 5;
+    let betas: Vec<Fr> = (0..d).map(|_| Fr::random_element()).collect();
+
+    let mut expected_products = vec![Fr::zero(); 1 << d];
+    for i in 0..(1usize << d) {
+        expected_products[i] = Fr::one();
+        for j in 0..d {
+            if (i & (1 << j)) != 0 {
+                expected_products[i] = expected_products[i] * betas[j];
+            }
+        }
+    }
+    let poly = GateSeparatorPolynomial::<Bn254FrParams>::new(betas, d);
+    assert_eq!(poly.beta_products, expected_products);
+}
+
+#[test]
+fn gate_separator_empty_betas() {
+    // Empty betas: current_element()==1, partially_evaluate is no-op, result stays 1
+    let poly = GateSeparatorPolynomial::<Bn254FrParams>::new(vec![], 0);
+    assert_eq!(poly.current_element(), Fr::one());
+    assert_eq!(poly.partial_evaluation_result, Fr::one());
+
+    let mut poly2 = GateSeparatorPolynomial::<Bn254FrParams>::new_verifier(vec![]);
+    poly2.partially_evaluate(Fr::from(42u64));
+    assert_eq!(poly2.partial_evaluation_result, Fr::one());
+    assert_eq!(poly2.current_element(), Fr::one());
+}
+
+#[test]
+fn gate_separator_post_challenge() {
+    // d=3 random; new_with_challenges result == manual product
+    let d = 3;
+    let betas: Vec<Fr> = (0..d).map(|_| Fr::random_element()).collect();
+    let challenges: Vec<Fr> = (0..d).map(|_| Fr::random_element()).collect();
+
+    let poly = GateSeparatorPolynomial::<Bn254FrParams>::new_with_challenges(
+        betas.clone(),
+        &challenges,
+    );
+
+    let mut expected = Fr::one();
+    for i in 0..d {
+        expected = expected * (Fr::one() - challenges[i] + challenges[i] * betas[i]);
+    }
+    assert_eq!(poly.partial_evaluation_result, expected);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UnivariateCoefficientBasis tests (from univariate_coefficient_basis.test.cpp)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn coeff_basis_conversion() {
+    // C++ test: Conversion — Random eval→coeff→eval roundtrip for degree-1
+    let a0 = Fr::random_element();
+    let a1 = Fr::random_element();
+    let expected = Univariate::<Bn254FrParams, 2>::new([a0, a1]);
+    let coeff = UnivariateCoefficientBasis::<Bn254FrParams, 2>::from_univariate(&expected);
+    let result: Univariate<Bn254FrParams, 2> = coeff.to_univariate();
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn coeff_basis_addition() {
+    // C++ test: Addition — {1,2}+{3,4}={4,6}, matches Univariate addition after conversion
+    let f1 = Univariate::<Bn254FrParams, 2>::new([Fr::from(1u64), Fr::from(2u64)]);
+    let f2 = Univariate::<Bn254FrParams, 2>::new([Fr::from(3u64), Fr::from(4u64)]);
+    let f1_m = UnivariateCoefficientBasis::<Bn254FrParams, 2>::from_univariate(&f1);
+    let f2_m = UnivariateCoefficientBasis::<Bn254FrParams, 2>::from_univariate(&f2);
+
+    let sum = f1_m + f2_m;
+    let result: Univariate<Bn254FrParams, 2> = sum.to_univariate();
+    let expected = f1 + f2;
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn coeff_basis_multiplication() {
+    // C++ test: Multiplication — (1+X)*(3+X) → degree-2, compare with extend_to*extend_to
+    let f1 = Univariate::<Bn254FrParams, 2>::new([Fr::from(1u64), Fr::from(2u64)]);
+    let f2 = Univariate::<Bn254FrParams, 2>::new([Fr::from(3u64), Fr::from(4u64)]);
+    let f1_m = UnivariateCoefficientBasis::<Bn254FrParams, 2>::from_univariate(&f1);
+    let f2_m = UnivariateCoefficientBasis::<Bn254FrParams, 2>::from_univariate(&f2);
+
+    let product = f1_m.mul(&f2_m);
+    let result: Univariate<Bn254FrParams, 3> = product.to_univariate();
+    let expected = f1.extend_to::<3>() * f2.extend_to::<3>();
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn coeff_basis_sqr() {
+    // Random f; sqr() == f*f
+    let f = Univariate::<Bn254FrParams, 2>::new([Fr::random_element(), Fr::random_element()]);
+    let f_m = UnivariateCoefficientBasis::<Bn254FrParams, 2>::from_univariate(&f);
+
+    let sqr_result: Univariate<Bn254FrParams, 3> = f_m.sqr().to_univariate();
+    let mul_result: Univariate<Bn254FrParams, 3> = f_m.mul(&f_m).to_univariate();
+    assert_eq!(sqr_result, mul_result);
+
+    // Also verify against pointwise squaring in evaluation form
+    let ext = f.extend_to::<3>();
+    let expected = ext * ext;
+    assert_eq!(sqr_result, expected);
+}
+
+#[test]
+fn coeff_basis_scalar_ops() {
+    // +Fr, -Fr, *Fr on coefficients
+    let f = Univariate::<Bn254FrParams, 2>::new([Fr::from(5u64), Fr::from(11u64)]);
+    let f_m = UnivariateCoefficientBasis::<Bn254FrParams, 2>::from_univariate(&f);
+    let s = Fr::from(3u64);
+
+    // add_scalar: only affects constant term
+    let added = f_m.add_scalar(s);
+    let result_add: Univariate<Bn254FrParams, 2> = added.to_univariate();
+    // a0=5, a1=11-5=6 → (a0+3)=8, a1=6 → evals: [8, 14]
+    assert_eq!(result_add.value_at(0), Fr::from(8u64));
+    assert_eq!(result_add.value_at(1), Fr::from(14u64));
+
+    // sub_scalar: only affects constant term
+    let subbed = f_m.sub_scalar(s);
+    let result_sub: Univariate<Bn254FrParams, 2> = subbed.to_univariate();
+    assert_eq!(result_sub.value_at(0), Fr::from(2u64));
+    assert_eq!(result_sub.value_at(1), Fr::from(8u64));
+
+    // mul_scalar: all coefficients
+    let scaled = f_m.mul_scalar(s);
+    let result_mul: Univariate<Bn254FrParams, 2> = scaled.to_univariate();
+    assert_eq!(result_mul.value_at(0), Fr::from(15u64));
+    assert_eq!(result_mul.value_at(1), Fr::from(33u64));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RowDisablingPolynomial tests (from row_disabling_polynomial.test.cpp)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn row_disabling_default_construction() {
+    let rdp = RowDisablingPolynomial::<Bn254FrParams>::default();
+    assert_eq!(rdp.eval_at_0, Fr::one());
+    assert_eq!(rdp.eval_at_1, Fr::one());
+}
+
+#[test]
+fn row_disabling_update_evaluations() {
+    // C++ test: ComputeDisabledContribution (unit part)
+    // Round 0: no change. Round 1: eval_at_0=0. Round 2: eval_at_1 *= challenge.
+    let c0 = Fr::random_element();
+    let c1 = Fr::random_element();
+    let c2 = Fr::random_element();
+
+    let mut rdp = RowDisablingPolynomial::<Bn254FrParams>::default();
+
+    // Round 0: both stay 1
+    rdp.update_evaluations(c0, 0);
+    assert_eq!(rdp.eval_at_0, Fr::one());
+    assert_eq!(rdp.eval_at_1, Fr::one());
+
+    // Round 1: eval_at_0 becomes 0
+    rdp.update_evaluations(c1, 1);
+    assert_eq!(rdp.eval_at_0, Fr::zero());
+    assert_eq!(rdp.eval_at_1, Fr::one());
+
+    // Round 2: eval_at_1 *= c2
+    rdp.update_evaluations(c2, 2);
+    assert_eq!(rdp.eval_at_0, Fr::zero());
+    assert_eq!(rdp.eval_at_1, c2);
+}
+
+#[test]
+fn row_disabling_evaluate_at_challenge() {
+    // C++ test: ComputeDisabledContribution (eval part)
+    // d=4 random challenges; result == 1 - challenges[2]*challenges[3]
+    let d = 4;
+    let challenges: Vec<Fr> = (0..d).map(|_| Fr::random_element()).collect();
+
+    let result =
+        RowDisablingPolynomial::<Bn254FrParams>::evaluate_at_challenge(&challenges, d);
+    let expected = Fr::one() - challenges[2] * challenges[3];
+    assert_eq!(result, expected);
+
+    // Edge: d=2 → product of empty range = 1, so result = 1 - 1 = 0
+    let challenges2: Vec<Fr> = (0..2).map(|_| Fr::random_element()).collect();
+    let result2 =
+        RowDisablingPolynomial::<Bn254FrParams>::evaluate_at_challenge(&challenges2, 2);
+    assert_eq!(result2, Fr::zero());
 }

@@ -6,6 +6,9 @@ pub mod evaluation_domain;
 pub mod univariate;
 pub mod barycentric;
 pub mod eq_polynomial;
+pub mod gate_separator;
+pub mod univariate_coefficient_basis;
+pub mod row_disabling_polynomial;
 
 #[cfg(test)]
 mod tests;
