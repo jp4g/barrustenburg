@@ -12,6 +12,7 @@ pub mod oink_prover;
 pub mod oink_verifier;
 pub mod ultra_prover;
 pub mod ultra_verifier;
+mod validation_tests;
 
 pub use oink_prover::{OinkOutput, OinkProver};
 pub use oink_verifier::OinkVerifierOutput;

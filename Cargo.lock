@@ -139,6 +139,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bbrs-ultra-honk"
+version = "0.1.0"
+dependencies = [
+ "bbrs-commitment-schemes",
+ "bbrs-ecc",
+ "bbrs-flavor",
+ "bbrs-honk",
+ "bbrs-polynomials",
+ "bbrs-relations",
+ "bbrs-srs",
+ "bbrs-sumcheck",
+ "bbrs-transcript",
+]
+
+[[package]]
 name = "blake2"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

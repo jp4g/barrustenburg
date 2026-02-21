@@ -158,4 +158,65 @@ mod tests {
         run_test(false);
         run_test(true);
     }
+
+    /// Port of C++ `RelationManual::Poseidon2ExternalRelationZeros`
+    ///
+    /// Deterministic vector test: all wires zero, selector enabled → output should be zero.
+    #[test]
+    fn test_poseidon2_external_relation_zeros() {
+        let mut input = InputElements::<P>::get_special();
+        // Zero out everything
+        for e in input.data.iter_mut() {
+            *e = Fr::zero();
+        }
+        // Set q_poseidon2_external = 1
+        input.data[12] = Fr::one();
+
+        let params = RelationParameters::<Fr>::get_random();
+        let mut accum = [Fr::zero(); NUM_SUBRELATIONS];
+        let one = Fr::one();
+        accumulate(&mut accum, &input, &params, &one);
+
+        for i in 0..NUM_SUBRELATIONS {
+            assert!(accum[i].is_zero(), "Subrelation {i} should be zero when all wires are zero");
+        }
+    }
+
+    /// Port of C++ `RelationManual::Poseidon2ExternalRelationRandom`
+    ///
+    /// Deterministic vector test with known C++ values:
+    ///   w = (5, 4, 1, 7), q = (6, 9, 8, 3)
+    ///   v = w + q = (11, 13, 9, 10)
+    ///   u = v^5 = (161051, 371293, 59049, 100000)
+    ///   M_E * u = (3763355, 3031011, 2270175, 1368540)
+    ///   w_shift = M_E * u → all subrelation outputs = 0
+    #[test]
+    fn test_poseidon2_external_relation_random() {
+        let mut input = InputElements::<P>::get_special();
+        for e in input.data.iter_mut() {
+            *e = Fr::zero();
+        }
+        input.data[12] = Fr::one();                    // q_poseidon2_external
+        input.data[28] = Fr::from(5u64);               // w_l
+        input.data[29] = Fr::from(4u64);               // w_r
+        input.data[30] = Fr::from(1u64);               // w_o
+        input.data[31] = Fr::from(7u64);               // w_4
+        input.data[1]  = Fr::from(6u64);               // q_l
+        input.data[2]  = Fr::from(9u64);               // q_r
+        input.data[3]  = Fr::from(8u64);               // q_o
+        input.data[4]  = Fr::from(3u64);               // q_4
+        input.data[35] = Fr::from(3763355u64);         // w_l_shift
+        input.data[36] = Fr::from(3031011u64);         // w_r_shift
+        input.data[37] = Fr::from(2270175u64);         // w_o_shift
+        input.data[38] = Fr::from(1368540u64);         // w_4_shift
+
+        let params = RelationParameters::<Fr>::get_random();
+        let mut accum = [Fr::zero(); NUM_SUBRELATIONS];
+        let one = Fr::one();
+        accumulate(&mut accum, &input, &params, &one);
+
+        for i in 0..NUM_SUBRELATIONS {
+            assert!(accum[i].is_zero(), "Subrelation {i} should be zero for known Poseidon2 external test vector");
+        }
+    }
 }

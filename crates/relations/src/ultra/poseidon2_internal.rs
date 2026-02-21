@@ -132,4 +132,70 @@ mod tests {
         run_test(false);
         run_test(true);
     }
+
+    /// Port of C++ `RelationManual::Poseidon2InternalRelationZeros`
+    ///
+    /// Deterministic vector test: all wires zero, selector enabled → output should be zero.
+    #[test]
+    fn test_poseidon2_internal_relation_zeros() {
+        let mut input = InputElements::<P>::get_special();
+        for e in input.data.iter_mut() {
+            *e = Fr::zero();
+        }
+        // Set q_poseidon2_internal = 1
+        input.data[13] = Fr::one();
+
+        let params = RelationParameters::<Fr>::get_random();
+        let mut accum = [Fr::zero(); NUM_SUBRELATIONS];
+        let one = Fr::one();
+        accumulate(&mut accum, &input, &params, &one);
+
+        for i in 0..NUM_SUBRELATIONS {
+            assert!(accum[i].is_zero(), "Subrelation {i} should be zero when all wires are zero");
+        }
+    }
+
+    /// Port of C++ `RelationManual::Poseidon2InternalRelationRandom`
+    ///
+    /// Deterministic vector test with known C++ values:
+    ///   w = (1, 2, 3, 4), q_l = 5
+    ///   u1 = (w_1 + q_1)^5 = (1+5)^5 = 7776
+    ///   sum = u1 + w_2 + w_3 + w_4 = 7776 + 2 + 3 + 4 = 7785
+    ///   M_I * [u1, w_2, w_3, w_4]:
+    ///     w_l_shift = 0x122d9ce41e83c533318954d77a4ebc40eb729f6543ebd5f2e4ecb175ced3bc74
+    ///     w_r_shift = 0x185028b6d489be7c029367a14616776b33bf2eada9bb370950d6719f68b5067f
+    ///     w_o_shift = 0x00fce289a96b3f4a18562d0ef0ab76ca165e613222aa0c24501377003c5622a8
+    ///     w_4_shift = 0x27e7677799fda1694819803f459b76d2fb1c45fdf0773375c72d61e8efb92893
+    #[test]
+    fn test_poseidon2_internal_relation_random() {
+        let mut input = InputElements::<P>::get_special();
+        for e in input.data.iter_mut() {
+            *e = Fr::zero();
+        }
+        input.data[13] = Fr::one();                    // q_poseidon2_internal
+        input.data[28] = Fr::from(1u64);               // w_l
+        input.data[29] = Fr::from(2u64);               // w_r
+        input.data[30] = Fr::from(3u64);               // w_o
+        input.data[31] = Fr::from(4u64);               // w_4
+        input.data[1]  = Fr::from(5u64);               // q_l
+
+        // Expected M_I * [u1, w_2, w_3, w_4] values from C++ (big-endian hex → little-endian limbs)
+        // 0x122d9ce41e83c533_318954d77a4ebc40_eb729f6543ebd5f2_e4ecb175ced3bc74
+        input.data[35] = Fr::from_limbs([0xe4ecb175ced3bc74, 0xeb729f6543ebd5f2, 0x318954d77a4ebc40, 0x122d9ce41e83c533]);
+        // 0x185028b6d489be7c_029367a14616776b_33bf2eada9bb3709_50d6719f68b5067f
+        input.data[36] = Fr::from_limbs([0x50d6719f68b5067f, 0x33bf2eada9bb3709, 0x029367a14616776b, 0x185028b6d489be7c]);
+        // 0x00fce289a96b3f4a_18562d0ef0ab76ca_165e613222aa0c24_501377003c5622a8
+        input.data[37] = Fr::from_limbs([0x501377003c5622a8, 0x165e613222aa0c24, 0x18562d0ef0ab76ca, 0x00fce289a96b3f4a]);
+        // 0x27e7677799fda169_4819803f459b76d2_fb1c45fdf0773375_c72d61e8efb92893
+        input.data[38] = Fr::from_limbs([0xc72d61e8efb92893, 0xfb1c45fdf0773375, 0x4819803f459b76d2, 0x27e7677799fda169]);
+
+        let params = RelationParameters::<Fr>::get_random();
+        let mut accum = [Fr::zero(); NUM_SUBRELATIONS];
+        let one = Fr::one();
+        accumulate(&mut accum, &input, &params, &one);
+
+        for i in 0..NUM_SUBRELATIONS {
+            assert!(accum[i].is_zero(), "Subrelation {i} should be zero for known Poseidon2 internal test vector");
+        }
+    }
 }
