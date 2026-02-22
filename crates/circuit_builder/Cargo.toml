@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 bbrs-ecc = { path = "../ecc" }
 bbrs-numeric = { path = "../numeric" }
+bbrs-crypto = { path = "../crypto" }
 
 [dev-dependencies]
