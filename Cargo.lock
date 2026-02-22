@@ -36,6 +36,7 @@ name = "bbrs-circuit-builder"
 version = "0.1.0"
 dependencies = [
  "bbrs-ecc",
+ "bbrs-numeric",
 ]
 
 [[package]]
