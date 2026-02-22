@@ -318,6 +318,7 @@ pub struct LinearCombinationOfClaims<P: FieldParams> {
 pub struct ShplonkVerifier<C: CurveParams> {
     pows_of_nu: Vec<Field<C::ScalarFieldParams>>,
     pow_idx: usize,
+    #[allow(dead_code)]
     quotient: AffineElement<C>,
     z_challenge: Field<C::ScalarFieldParams>,
     commitments: Vec<AffineElement<C>>,
