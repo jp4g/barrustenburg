@@ -52,7 +52,8 @@ impl U512Ext for U512 {
 mod tests {
     use super::*;
     use crate::uint256::U256Ext;
-    use crate::U256;
+    use crate::{U256, U1024};
+    use crypto_bigint::Zero;
 
     #[test]
     fn lo_hi_roundtrip() {
@@ -177,5 +178,68 @@ mod tests {
         let c = a.wrapping_add(&b);
         assert_eq!(c.lo(), U256::ZERO);
         assert_eq!(c.hi(), U256::ONE);
+    }
+
+    #[test]
+    fn u1024_mod_reduction() {
+        // Create U1024 from two U512 halves, reduce mod known modulus
+        let lo = U512::from_lo_hi(U256::from_limbs([100, 0, 0, 0]), U256::ZERO);
+        let hi = U512::from_lo_hi(U256::ZERO, U256::ZERO);
+        let wide: U1024 = lo.concat(&hi);
+        let modulus_lo = U512::from_lo_hi(U256::from_limbs([7, 0, 0, 0]), U256::ZERO);
+        let modulus: U1024 = modulus_lo.concat(&U512::from_lo_hi(U256::ZERO, U256::ZERO));
+        let (_q, r) = wide.div_rem(&modulus.to_nz().unwrap());
+        let (r_lo, _r_hi) = r.split();
+        assert_eq!(r_lo.lo(), U256::from_limbs([2, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u512_bit_not() {
+        let a = U512::from_lo_hi(U256::from_limbs([0xFF00, 0, 0, 0]), U256::ZERO);
+        let not_a = a.not();
+        let lo = not_a.lo();
+        assert_eq!(lo.limbs()[0], !0xFF00u64);
+        assert_eq!(lo.limbs()[1], u64::MAX);
+        assert_eq!(not_a.hi(), U256::from_limbs([u64::MAX; 4]));
+        assert_eq!(not_a.not(), a);
+    }
+
+    #[test]
+    fn u512_logic_not() {
+        assert!(bool::from(U512::ZERO.is_zero()));
+        assert!(!bool::from(U512::ONE.is_zero()));
+        let nonzero = U512::from_lo_hi(U256::ZERO, U256::ONE);
+        assert!(!bool::from(nonzero.is_zero()));
+    }
+
+    #[test]
+    fn u512_invmod_regression() {
+        // Verify a * a_inv mod m == 1 using widening mul + div_rem
+        let a = U512::from_lo_hi(U256::from_limbs([7, 0, 0, 0]), U256::ZERO);
+        let m = U512::from_lo_hi(U256::from_limbs([11, 0, 0, 0]), U256::ZERO);
+        // 7 * 8 = 56, 56 mod 11 = 1 (so 8 is the inverse of 7 mod 11)
+        let a_inv = U512::from_lo_hi(U256::from_limbs([8, 0, 0, 0]), U256::ZERO);
+        let product = a.wrapping_mul(&a_inv);
+        let (_q, r) = product.div_rem(&m.to_nz().unwrap());
+        assert_eq!(r, U512::from_lo_hi(U256::from_limbs([1, 0, 0, 0]), U256::ZERO));
+    }
+
+    #[test]
+    fn u512_barrett_reduction_regression() {
+        // Reduce specific 512-bit value mod known modulus, verify exact result
+        // 1000000 mod 997 = 9
+        let a = U512::from_lo_hi(U256::from_limbs([1_000_000, 0, 0, 0]), U256::ZERO);
+        let m = U512::from_lo_hi(U256::from_limbs([997, 0, 0, 0]), U256::ZERO);
+        let (_q, r) = a.div_rem(&m.to_nz().unwrap());
+        assert_eq!(r.lo(), U256::from_limbs([9, 0, 0, 0]));
+
+        // Larger: verify cross-limb reduction
+        let big = U512::from_lo_hi(
+            U256::from_limbs([u64::MAX, u64::MAX, 0, 0]),
+            U256::ZERO,
+        );
+        let p = U512::from_lo_hi(U256::from_limbs([0xFFFFFFFFFFFFFFFD, u64::MAX, 0, 0]), U256::ZERO);
+        let (_q2, r2) = big.div_rem(&p.to_nz().unwrap());
+        assert_eq!(r2, U512::from_lo_hi(U256::from_limbs([2, 0, 0, 0]), U256::ZERO));
     }
 }

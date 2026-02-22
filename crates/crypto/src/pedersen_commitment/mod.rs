@@ -76,4 +76,26 @@ mod tests {
 
         assert_eq!(result, expected, "commit([0, 1]) mismatch");
     }
+
+    #[test]
+    fn test_pedersen_commitment_multiple() {
+        let inputs: Vec<GrumpkinFq> = (1..=5).map(|i| GrumpkinFq::from(i as u64)).collect();
+        let ctx = GeneratorContext::default();
+        let result = commit_native(&inputs, &ctx);
+
+        // Verify on curve
+        assert!(result.on_curve(), "commitment should be on curve");
+
+        // Verify deterministic: same inputs produce same output
+        let result2 = commit_native(&inputs, &ctx);
+        assert_eq!(result, result2, "commitment should be deterministic");
+
+        // Verify not infinity (non-trivial commitment)
+        assert!(!result.is_point_at_infinity(), "commitment should not be infinity");
+
+        // Verify different inputs produce different outputs
+        let other_inputs: Vec<GrumpkinFq> = (2..=6).map(|i| GrumpkinFq::from(i as u64)).collect();
+        let other_result = commit_native(&other_inputs, &ctx);
+        assert_ne!(result, other_result, "different inputs should produce different commitments");
+    }
 }

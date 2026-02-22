@@ -80,7 +80,7 @@ impl U256Ext for U256 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crypto_bigint::{Encoding, U256};
+    use crypto_bigint::{Encoding, U256, Zero};
 
     #[test]
     fn from_limbs_roundtrip() {
@@ -239,5 +239,39 @@ mod tests {
         assert!(b > a);
         assert!(a <= a);
         assert!(a >= a);
+    }
+
+    #[test]
+    fn u256_bit_not() {
+        let a = U256::from_limbs([0xFF00, 0, 0, 0]);
+        let not_a = a.not();
+        assert_eq!(not_a.limbs()[0], !0xFF00u64);
+        assert_eq!(not_a.limbs()[1], u64::MAX);
+        assert_eq!(not_a.limbs()[2], u64::MAX);
+        assert_eq!(not_a.limbs()[3], u64::MAX);
+        // Double NOT should return original
+        assert_eq!(not_a.not(), a);
+    }
+
+    #[test]
+    fn u256_logic_not() {
+        assert!(bool::from(U256::ZERO.is_zero()));
+        assert!(!bool::from(U256::ONE.is_zero()));
+        assert!(!bool::from(U256::from_limbs([0, 0, 0, 1]).is_zero()));
+    }
+
+    #[test]
+    fn u256_from_string() {
+        // Construct from big-endian hex string and verify matches from_limbs
+        let hex_str = "000000000000000000000000000000000000000000000000000000000000002A";
+        let from_hex = U256::from_be_hex(hex_str);
+        let from_limbs = U256::from_limbs([42, 0, 0, 0]);
+        assert_eq!(from_hex, from_limbs);
+
+        // Larger value: 0x1234...
+        let hex_str2 = "00000000000000010000000000000002000000000000000300000000000000FF";
+        let from_hex2 = U256::from_be_hex(hex_str2);
+        let from_limbs2 = U256::from_limbs([0x00000000000000FF, 0x0000000000000003, 0x0000000000000002, 0x0000000000000001]);
+        assert_eq!(from_hex2, from_limbs2);
     }
 }

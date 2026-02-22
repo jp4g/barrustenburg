@@ -3,7 +3,7 @@ use crate::curves::grumpkin::GrumpkinG1Params;
 use crate::curves::secp256k1::{
     Secp256k1FqParams, Secp256k1FrParams, Secp256k1G1Params, Secp256k1Fr,
 };
-use crate::curves::secp256r1::{Secp256r1FqParams, Secp256r1FrParams, Secp256r1G1Params};
+use crate::curves::secp256r1::{Secp256r1FqParams, Secp256r1FrParams, Secp256r1G1Params, Secp256r1Fr};
 use crate::fields::field::Field;
 use crate::fields::field_params::FieldParams;
 use crate::groups::affine_element::AffineElement;
@@ -2750,4 +2750,450 @@ fn secp256r1_fr_montgomery_roundtrip() {
         let roundtrip = a.from_montgomery_form().to_montgomery_form();
         assert_eq!(a, roundtrip);
     }
+}
+
+// =========================================================================
+// Fq field tests — covers MulShortIntegers, CoarseEquivalenceChecks,
+// Sqrt (deterministic), OneAndZero, SplitIntoEndomorphismScalarsSimple, RInv
+// =========================================================================
+
+#[test]
+fn bn254_fq_mul_short_integers() {
+    for a in 1u64..=10 {
+        for b in 1u64..=10 {
+            let fa = Fq::from(a);
+            let fb = Fq::from(b);
+            let fc = Fq::from(a * b);
+            assert_eq!(fa * fb, fc, "Fq: {} * {} should be {}", a, b, a * b);
+        }
+    }
+}
+
+#[test]
+fn bn254_fq_coarse_equivalence() {
+    for _ in 0..100 {
+        let a = Fq::random_element();
+        let b = Fq::random_element();
+        let c = Fq::random_element();
+        // Distributive: a*(b+c) == a*b + a*c
+        assert_eq!(a * (b + c), a * b + a * c, "Fq distributive law");
+        // Difference of squares: (a-b)*(a+b) == a^2 - b^2
+        assert_eq!((a - b) * (a + b), a.sqr() - b.sqr(), "Fq difference of squares");
+    }
+}
+
+#[test]
+fn bn254_fq_sqrt_deterministic() {
+    let forty_nine = Fq::from(49u64);
+    let (is_qr, root) = forty_nine.sqrt();
+    assert!(is_qr, "49 should be a quadratic residue");
+    assert_eq!(root.sqr(), forty_nine, "sqrt(49)^2 should be 49");
+    // Verify root is either 7 or -7
+    let seven = Fq::from(7u64);
+    assert!(root == seven || root == seven.negate(), "sqrt(49) should be +/- 7");
+}
+
+#[test]
+fn bn254_fq_one_and_zero() {
+    let x = Fq::random_element();
+    assert_eq!(Fq::one() * x, x, "one * x should be x");
+    assert_eq!(x * Fq::one(), x, "x * one should be x");
+    assert_eq!(Fq::zero() + x, x, "zero + x should be x");
+    assert_eq!(x + Fq::zero(), x, "x + zero should be x");
+    assert_eq!(x - x, Fq::zero(), "x - x should be zero");
+}
+
+#[test]
+fn bn254_fq_split_endo_simple() {
+    // C++ SplitIntoEndomorphismScalarsSimple: input = {1, 0, 0, 0}
+    let k = Fq::from_raw([1, 0, 0, 0]);
+    let (k1, k2) = k.split_into_endomorphism_scalars();
+    let k1_mont = k1.to_montgomery_form();
+    let k2_mont = k2.to_montgomery_form();
+    let beta = Fq::cube_root_of_unity();
+    let result = (k1_mont - k2_mont * beta).from_montgomery_form();
+    assert_eq!(result, k, "Fq endo split: k1 - k2*beta should equal k");
+}
+
+#[test]
+fn bn254_fq_r_inv() {
+    // Montgomery invariant: MODULUS[0] * R_INV + 1 == 0 (mod 2^64)
+    let r_inv = Bn254FqParams::R_INV;
+    let mod_lo = Bn254FqParams::MODULUS[0];
+    let product = mod_lo.wrapping_mul(r_inv);
+    assert_eq!(product.wrapping_add(1), 0, "MODULUS[0] * R_INV + 1 should be 0 mod 2^64");
+}
+
+// =========================================================================
+// G1 group tests — AddAffineTest, OperatorOrdering, Serialize, InitializationCheck
+// =========================================================================
+
+#[test]
+fn bn254_add_affine_test() {
+    let a = Element::<Bn254G1Params>::random_element().to_affine();
+    let b = Element::<Bn254G1Params>::random_element().to_affine();
+    let result = Element::from_affine(&a) + Element::from_affine(&b);
+    assert!(result.on_curve(), "a + b should be on curve");
+    assert!(!result.is_point_at_infinity());
+}
+
+#[test]
+fn bn254_operator_ordering() {
+    // Different projective representations of same affine point compare equal after normalization
+    let a = Element::<Bn254G1Params>::random_element();
+    let a_aff = a.to_affine();
+    let b = Element::from_affine(&a_aff);
+    // a and b represent the same affine point but may have different Z coords
+    let a_norm = a.normalize();
+    let b_norm = b.normalize();
+    assert_eq!(a_norm.to_affine().x, b_norm.to_affine().x, "normalized x should match");
+    assert_eq!(a_norm.to_affine().y, b_norm.to_affine().y, "normalized y should match");
+}
+
+#[test]
+fn bn254_serialize_affine() {
+    // Roundtrip test
+    let p = Element::<Bn254G1Params>::random_element().to_affine();
+    let buf = p.to_buffer();
+    assert_eq!(buf.len(), 64);
+    let x_bytes: &[u8; 32] = buf[..32].try_into().unwrap();
+    let y_bytes: &[u8; 32] = buf[32..].try_into().unwrap();
+    let x_recovered = Fq::from_be_bytes(x_bytes);
+    let y_recovered = Fq::from_be_bytes(y_bytes);
+    assert_eq!(p.x, x_recovered, "serialized x should roundtrip");
+    assert_eq!(p.y, y_recovered, "serialized y should roundtrip");
+
+    // Infinity serialization: all 0xFF
+    let inf = AffineElement::<Bn254G1Params>::infinity();
+    let buf_inf = inf.to_buffer();
+    assert_eq!(buf_inf, [0xFF; 64], "infinity should serialize to all 0xFF");
+}
+
+#[test]
+fn bn254_initialization_check() {
+    use crate::groups::curve_params::CurveParams;
+    let g = Element::<Bn254G1Params>::one();
+    assert!(g.on_curve(), "generator should be on curve");
+    assert!(!g.is_point_at_infinity(), "generator should not be infinity");
+    let g_aff = g.to_affine();
+    let expected_x = Bn254G1Params::generator_x();
+    let expected_y = Bn254G1Params::generator_y();
+    assert_eq!(g_aff.x, expected_x, "generator x should match generator_x()");
+    assert_eq!(g_aff.y, expected_y, "generator y should match generator_y()");
+}
+
+// =========================================================================
+// Grumpkin — GroupExponentiationZeroAndOne
+// =========================================================================
+
+#[test]
+fn grumpkin_group_exponentiation_zero_and_one() {
+    type GrumpkinFr = Field<Bn254FqParams>;
+    let g = Element::<GrumpkinG1Params>::one();
+    let zero = GrumpkinFr::zero();
+    let one_scalar = GrumpkinFr::one();
+    let result_zero = g.mul(&zero);
+    let result_one = g.mul(&one_scalar);
+    assert!(result_zero.is_point_at_infinity(), "Grumpkin G*0 should be infinity");
+    assert_eq!(result_one, g, "Grumpkin G*1 should be G");
+}
+
+// =========================================================================
+// G2 tests — RandomAffineElement, DblCheck, ExponentiationZeroAndOne
+// =========================================================================
+
+#[test]
+fn g2_random_affine_element() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    // Create "random" G2 by scalar mul
+    let scalar = Fr::random_element();
+    let p = g.mul_scalar(&scalar);
+    let aff = p.to_affine();
+    assert!(!aff.is_point_at_infinity(), "random G2 should not be infinity");
+    // Verify on curve: y^2 == x^3 + b_twist
+    let b_twist = Fq2::twist_coeff_b();
+    let y_sq = aff.y.sqr();
+    let x_cubed = aff.x.sqr() * aff.x;
+    let rhs = x_cubed + b_twist;
+    assert_eq!(y_sq, rhs, "random G2 affine should be on curve");
+}
+
+#[test]
+fn g2_dbl_check() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let doubled = g.dbl();
+    let g_aff = g.to_affine();
+    let d_aff = doubled.to_affine();
+    assert_ne!(g_aff.x, d_aff.x, "doubled G2 should differ from generator");
+    // Verify doubled point on curve
+    let b_twist = Fq2::twist_coeff_b();
+    let y_sq = d_aff.y.sqr();
+    let x_cubed = d_aff.x.sqr() * d_aff.x;
+    let rhs = x_cubed + b_twist;
+    assert_eq!(y_sq, rhs, "doubled G2 should be on curve");
+}
+
+#[test]
+fn g2_exponentiation_zero_and_one() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let result_zero = g.mul_scalar(&Fr::zero());
+    let result_one = g.mul_scalar(&Fr::one());
+    assert!(result_zero.is_point_at_infinity(), "G2 G*0 should be infinity");
+    assert_eq!(result_one.to_affine().x, g.to_affine().x, "G2 G*1 should be G (x)");
+    assert_eq!(result_one.to_affine().y, g.to_affine().y, "G2 G*1 should be G (y)");
+}
+
+// =========================================================================
+// secp256k1 group tests — TestArithmetic, CheckGroupModulus,
+// AddExceptionInfinity, AddExceptionDbl, MixedAddExceptionInfinity,
+// MixedAddExceptionDbl, AddMixedAddConsistency, BatchNormalize
+// =========================================================================
+
+#[test]
+fn secp256k1_test_arithmetic() {
+    let a = Element::<Secp256k1G1Params>::random_element();
+    let b = Element::<Secp256k1G1Params>::random_element();
+    // a + b - b == a
+    let result = (a + b) + (-b);
+    assert_eq!(result, a, "secp256k1 a + b - b should equal a");
+    // a * 2 == a.dbl()
+    assert_eq!(a.scalar_mul(&[2, 0, 0, 0]), a.dbl(), "secp256k1 2*a should equal a.dbl()");
+}
+
+#[test]
+fn secp256k1_check_group_modulus() {
+    // Verify MODULUS matches known secp256k1 order
+    let order = Secp256k1FrParams::MODULUS;
+    assert_eq!(order[0], 0xBFD25E8CD0364141);
+    assert_eq!(order[1], 0xBAAEDCE6AF48A03B);
+    assert_eq!(order[2], 0xFFFFFFFFFFFFFFFE);
+    assert_eq!(order[3], 0xFFFFFFFFFFFFFFFF);
+}
+
+#[test]
+fn secp256k1_add_exception_infinity() {
+    let a = Element::<Secp256k1G1Params>::random_element();
+    let neg_a = -a;
+    let inf = Element::<Secp256k1G1Params>::infinity();
+    assert!(
+        (a + neg_a).is_point_at_infinity(),
+        "secp256k1 a + (-a) should be infinity"
+    );
+    assert_eq!(inf + a, a, "secp256k1 inf + a should be a");
+    assert_eq!(a + inf, a, "secp256k1 a + inf should be a");
+}
+
+#[test]
+fn secp256k1_add_exception_dbl() {
+    let a = Element::<Secp256k1G1Params>::random_element();
+    assert_eq!(a + a, a.dbl(), "secp256k1 a + a should equal a.dbl()");
+}
+
+#[test]
+fn secp256k1_mixed_add_exception_infinity() {
+    let a = Element::<Secp256k1G1Params>::random_element();
+    let a_aff = a.to_affine();
+    let neg_a_aff = (-a).to_affine();
+    let inf = Element::<Secp256k1G1Params>::infinity();
+    assert!(
+        (a + neg_a_aff).is_point_at_infinity(),
+        "secp256k1 a + (-a_affine) should be infinity"
+    );
+    assert_eq!(
+        (inf + a_aff).to_affine(),
+        a_aff,
+        "secp256k1 inf + a_affine should be a"
+    );
+}
+
+#[test]
+fn secp256k1_mixed_add_exception_dbl() {
+    let a = Element::<Secp256k1G1Params>::random_element();
+    let a_aff = a.to_affine();
+    assert_eq!(a + a_aff, a.dbl(), "secp256k1 a + a_affine should equal a.dbl()");
+}
+
+#[test]
+fn secp256k1_add_mixed_add_consistency() {
+    let a = Element::<Secp256k1G1Params>::random_element();
+    let b = Element::<Secp256k1G1Params>::random_element();
+    let b_aff = b.to_affine();
+    assert_eq!(a + b, a + b_aff, "secp256k1 projective add should match mixed add");
+}
+
+#[test]
+fn secp256k1_batch_normalize() {
+    let g = Element::<Secp256k1G1Params>::one();
+    let num_points = 2;
+    let mut points: Vec<Element<Secp256k1G1Params>> = Vec::new();
+    let mut normalized: Vec<Element<Secp256k1G1Params>> = Vec::new();
+    for _ in 0..num_points {
+        let a = g.mul_without_endomorphism(&Secp256k1Fr::random_element());
+        let b = g.mul_without_endomorphism(&Secp256k1Fr::random_element());
+        let point = a + b;
+        points.push(point);
+        normalized.push(point);
+    }
+    Element::batch_normalize(&mut normalized);
+    for i in 0..num_points {
+        let zz = points[i].z.sqr();
+        let zzz = points[i].z * zz;
+        assert_eq!(
+            normalized[i].x * zz,
+            points[i].x,
+            "secp256k1 batch_normalize x mismatch at {}",
+            i
+        );
+        assert_eq!(
+            normalized[i].y * zzz,
+            points[i].y,
+            "secp256k1 batch_normalize y mismatch at {}",
+            i
+        );
+    }
+}
+
+// =========================================================================
+// secp256r1 group tests — TestArithmetic, AddExceptionInfinity,
+// AddExceptionDbl, MixedAddExceptionInfinity, MixedAddExceptionDbl,
+// AddMixedAddConsistency, BatchNormalize
+// =========================================================================
+
+#[test]
+fn secp256r1_test_arithmetic() {
+    let a = Element::<Secp256r1G1Params>::random_element();
+    let b = Element::<Secp256r1G1Params>::random_element();
+    // a + b - b == a
+    let result = (a + b) + (-b);
+    assert_eq!(result, a, "secp256r1 a + b - b should equal a");
+    // a * 2 == a.dbl()
+    assert_eq!(
+        a.scalar_mul(&[2, 0, 0, 0]),
+        a.dbl(),
+        "secp256r1 2*a should equal a.dbl()"
+    );
+}
+
+#[test]
+fn secp256r1_add_exception_infinity() {
+    let a = Element::<Secp256r1G1Params>::random_element();
+    let neg_a = -a;
+    let inf = Element::<Secp256r1G1Params>::infinity();
+    assert!(
+        (a + neg_a).is_point_at_infinity(),
+        "secp256r1 a + (-a) should be infinity"
+    );
+    assert_eq!(inf + a, a, "secp256r1 inf + a should be a");
+    assert_eq!(a + inf, a, "secp256r1 a + inf should be a");
+}
+
+#[test]
+fn secp256r1_add_exception_dbl() {
+    let a = Element::<Secp256r1G1Params>::random_element();
+    assert_eq!(a + a, a.dbl(), "secp256r1 a + a should equal a.dbl()");
+}
+
+#[test]
+fn secp256r1_mixed_add_exception_infinity() {
+    let a = Element::<Secp256r1G1Params>::random_element();
+    let a_aff = a.to_affine();
+    let neg_a_aff = (-a).to_affine();
+    let inf = Element::<Secp256r1G1Params>::infinity();
+    assert!(
+        (a + neg_a_aff).is_point_at_infinity(),
+        "secp256r1 a + (-a_affine) should be infinity"
+    );
+    assert_eq!(
+        (inf + a_aff).to_affine(),
+        a_aff,
+        "secp256r1 inf + a_affine should be a"
+    );
+}
+
+#[test]
+fn secp256r1_mixed_add_exception_dbl() {
+    let a = Element::<Secp256r1G1Params>::random_element();
+    let a_aff = a.to_affine();
+    assert_eq!(a + a_aff, a.dbl(), "secp256r1 a + a_affine should equal a.dbl()");
+}
+
+#[test]
+fn secp256r1_add_mixed_add_consistency() {
+    let a = Element::<Secp256r1G1Params>::random_element();
+    let b = Element::<Secp256r1G1Params>::random_element();
+    let b_aff = b.to_affine();
+    assert_eq!(a + b, a + b_aff, "secp256r1 projective add should match mixed add");
+}
+
+#[test]
+fn secp256r1_batch_normalize() {
+    let g = Element::<Secp256r1G1Params>::one();
+    let num_points = 2;
+    let mut points: Vec<Element<Secp256r1G1Params>> = Vec::new();
+    let mut normalized: Vec<Element<Secp256r1G1Params>> = Vec::new();
+    for _ in 0..num_points {
+        let a = g.mul_without_endomorphism(&Secp256r1Fr::random_element());
+        let b = g.mul_without_endomorphism(&Secp256r1Fr::random_element());
+        let point = a + b;
+        points.push(point);
+        normalized.push(point);
+    }
+    Element::batch_normalize(&mut normalized);
+    for i in 0..num_points {
+        let zz = points[i].z.sqr();
+        let zzz = points[i].z * zz;
+        assert_eq!(
+            normalized[i].x * zz,
+            points[i].x,
+            "secp256r1 batch_normalize x mismatch at {}",
+            i
+        );
+        assert_eq!(
+            normalized[i].y * zzz,
+            points[i].y,
+            "secp256r1 batch_normalize y mismatch at {}",
+            i
+        );
+    }
+}
+
+// =========================================================================
+// Other ECC tests — WnafTwoBitWindow, InfinityBatchMulByScalarIsInfinity
+// =========================================================================
+
+#[test]
+fn wnaf_two_bit_window() {
+    use crate::groups::wnaf;
+    let r = Fr::random_element();
+    let raw = r.from_montgomery_form();
+    let buffer: [u64; 2] = [raw.data[0], raw.data[1] & 0x7fffffffffffffff];
+    let wnaf_bits = 2usize;
+    let wnaf_entries = (wnaf::SCALAR_BITS + wnaf_bits - 1) / wnaf_bits; // 64
+    let mut table = vec![0u64; wnaf_entries + 1];
+    let mut skew = false;
+
+    wnaf::fixed_wnaf(&buffer, &mut table, &mut skew, 0, 1, wnaf_bits);
+
+    // All entries should have abs value < 2^(wnaf_bits-1) = 2
+    for i in 0..wnaf_entries {
+        let abs_val = table[i] & 0x0fffffff;
+        assert!(abs_val < 2, "WNAF 2-bit entry {} abs value {} >= 2", i, abs_val);
+    }
+
+    // Recover scalar and verify
+    let recovered = recover_wnaf_scalar(&table, skew, wnaf_entries, wnaf_bits);
+    assert_eq!(recovered[0], buffer[0], "WNAF 2-bit: lo mismatch");
+    assert_eq!(recovered[1], buffer[1], "WNAF 2-bit: hi mismatch");
+}
+
+#[test]
+fn infinity_batch_mul_by_scalar_is_infinity() {
+    // Multiplying infinity points by scalars should return infinity
+    let inf = Element::<Bn254G1Params>::infinity();
+    let scalar1 = Fr::random_element();
+    let scalar2 = Fr::from(42u64);
+    let result1 = inf.mul(&scalar1);
+    let result2 = inf.mul(&scalar2);
+    assert!(result1.is_point_at_infinity(), "inf * random scalar should be infinity");
+    assert!(result2.is_point_at_infinity(), "inf * 42 should be infinity");
 }

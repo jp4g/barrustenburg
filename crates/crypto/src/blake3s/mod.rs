@@ -135,4 +135,17 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_blake3_large_input() {
+        let input = make_test_input(8192);
+        let output = blake3s(&input);
+        assert_eq!(output.len(), 32, "output should be 32 bytes");
+        // Verify matches direct blake3 hash
+        let expected = *blake3::hash(&input).as_bytes();
+        assert_eq!(output, expected, "large input hash should match blake3 crate directly");
+        // Verify different from empty hash
+        let empty_hash = blake3s(&[]);
+        assert_ne!(output, empty_hash, "large input hash should differ from empty hash");
+    }
 }
