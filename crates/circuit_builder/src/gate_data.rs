@@ -75,15 +75,18 @@ pub struct EccOpTuple {
 }
 
 /// Embedded curve point addition/subtraction: (x1, y1) +/- (x2, y2) = (x3, y3)
+///
+/// `sign_coefficient` is +1 for addition, -1 for subtraction (stored as field element
+/// in q_1 / q_sign of the elliptic block).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EccAddGate {
+pub struct EccAddGate<P: FieldParams> {
     pub x1: u32,
     pub y1: u32,
     pub x2: u32,
     pub y2: u32,
     pub x3: u32,
     pub y3: u32,
-    pub is_addition: bool,
+    pub sign_coefficient: Field<P>,
 }
 
 /// Embedded curve point doubling: 2 * (x1, y1) = (x3, y3)
