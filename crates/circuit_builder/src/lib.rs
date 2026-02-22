@@ -7,3 +7,4 @@
 pub mod builder_base;
 pub mod execution_trace;
 pub mod gate_data;
+pub mod ultra_builder;
