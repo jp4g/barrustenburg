@@ -37,7 +37,9 @@ version = "0.1.0"
 dependencies = [
  "bbrs-crypto",
  "bbrs-ecc",
+ "bbrs-honk",
  "bbrs-numeric",
+ "bbrs-relations",
 ]
 
 [[package]]

@@ -5,6 +5,7 @@
 //! module.
 
 pub mod builder_base;
+pub mod circuit_checker;
 pub mod execution_trace;
 pub mod gate_data;
 pub mod plookup_tables;
