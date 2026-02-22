@@ -232,7 +232,14 @@ impl GeminiProver {
 
         for l in 0..log_n - 1 {
             let n_l = 1 << (log_n - l - 1);
-            let u_l = multilinear_challenge[l];
+            // When virtual_log_n < log_n (high-degree attack scenario), challenges beyond
+            // virtual_log_n are not meaningful. Use zero to avoid out-of-bounds access.
+            // These fold polynomials are never committed or opened.
+            let u_l = if l < virtual_log_n {
+                multilinear_challenge[l]
+            } else {
+                Field::<P>::zero()
+            };
 
             // fold(A_l)[j] = (1-u_l)*A_l[2j] + u_l*A_l[2j+1]
             //              = A_l[2j] + u_l*(A_l[2j+1] - A_l[2j])
@@ -250,7 +257,11 @@ impl GeminiProver {
         // Virtual rounds: after log_n - 1 real folds, the polynomial stabilizes.
         // Compute the final evaluation.
         let last = &fold_polynomials[log_n - 2];
-        let u_last = multilinear_challenge[log_n - 1];
+        let u_last = if log_n - 1 < virtual_log_n {
+            multilinear_challenge[log_n - 1]
+        } else {
+            Field::<P>::zero()
+        };
         let final_eval = last.get(0) + u_last * (last.get(1) - last.get(0));
 
         // FOLD_{log_n} is a constant polynomial
