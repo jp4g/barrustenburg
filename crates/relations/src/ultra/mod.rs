@@ -2,6 +2,7 @@ pub mod arithmetic;
 pub mod delta_range;
 pub mod elliptic;
 pub mod input_elements;
+pub mod logderiv_lookup;
 pub mod memory;
 pub mod non_native_field;
 pub mod permutation;

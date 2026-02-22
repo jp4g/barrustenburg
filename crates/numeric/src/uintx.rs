@@ -85,4 +85,97 @@ mod tests {
         let result = r.lo();
         assert_eq!(result, U256::from_limbs([2, 0, 0, 0]));
     }
+
+    #[test]
+    fn u512_add() {
+        let a = U512::from_lo_hi(U256::from_limbs([100, 0, 0, 0]), U256::ZERO);
+        let b = U512::from_lo_hi(U256::from_limbs([200, 0, 0, 0]), U256::ZERO);
+        let c = a.wrapping_add(&b);
+        assert_eq!(c.lo(), U256::from_limbs([300, 0, 0, 0]));
+        assert_eq!(c.hi(), U256::ZERO);
+    }
+
+    #[test]
+    fn u512_sub() {
+        let a = U512::from_lo_hi(U256::from_limbs([300, 0, 0, 0]), U256::ZERO);
+        let b = U512::from_lo_hi(U256::from_limbs([100, 0, 0, 0]), U256::ZERO);
+        let c = a.wrapping_sub(&b);
+        assert_eq!(c.lo(), U256::from_limbs([200, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u512_mul() {
+        let a = U512::from_lo_hi(U256::from_limbs([7, 0, 0, 0]), U256::ZERO);
+        let b = U512::from_lo_hi(U256::from_limbs([6, 0, 0, 0]), U256::ZERO);
+        let c = a.wrapping_mul(&b);
+        assert_eq!(c.lo(), U256::from_limbs([42, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u512_div_and_mod() {
+        let a = U512::from_lo_hi(U256::from_limbs([100, 0, 0, 0]), U256::ZERO);
+        let b = U512::from_lo_hi(U256::from_limbs([7, 0, 0, 0]), U256::ZERO);
+        let (q, r) = a.div_rem(&b.to_nz().unwrap());
+        assert_eq!(q.lo(), U256::from_limbs([14, 0, 0, 0]));
+        assert_eq!(r.lo(), U256::from_limbs([2, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u512_get_bit() {
+        let val = U512::from_lo_hi(U256::from_limbs([0b1010, 0, 0, 0]), U256::ZERO);
+        assert!(val.bit_vartime(1));
+        assert!(!val.bit_vartime(2));
+        assert!(val.bit_vartime(3));
+    }
+
+    #[test]
+    fn u512_and() {
+        let a = U512::from_lo_hi(U256::from_limbs([0xFF00, 0, 0, 0]), U256::ZERO);
+        let b = U512::from_lo_hi(U256::from_limbs([0x0FF0, 0, 0, 0]), U256::ZERO);
+        let c = a.bitand(&b);
+        assert_eq!(c.lo(), U256::from_limbs([0x0F00, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u512_or() {
+        let a = U512::from_lo_hi(U256::from_limbs([0xFF00, 0, 0, 0]), U256::ZERO);
+        let b = U512::from_lo_hi(U256::from_limbs([0x00FF, 0, 0, 0]), U256::ZERO);
+        let c = a.bitor(&b);
+        assert_eq!(c.lo(), U256::from_limbs([0xFFFF, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u512_xor() {
+        let a = U512::from_lo_hi(U256::from_limbs([0xFF00, 0, 0, 0]), U256::ZERO);
+        let b = U512::from_lo_hi(U256::from_limbs([0x0FF0, 0, 0, 0]), U256::ZERO);
+        let c = a.bitxor(&b);
+        assert_eq!(c.lo(), U256::from_limbs([0xF0F0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u512_not_equal() {
+        let a = U512::from_lo_hi(U256::from_limbs([42, 0, 0, 0]), U256::ZERO);
+        let b = U512::from_lo_hi(U256::from_limbs([43, 0, 0, 0]), U256::ZERO);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn u512_equality() {
+        let a = U512::from_lo_hi(U256::from_limbs([42, 0, 0, 0]), U256::ZERO);
+        let b = U512::from_lo_hi(U256::from_limbs([42, 0, 0, 0]), U256::ZERO);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn u512_cross_boundary() {
+        // Test addition that crosses the lo/hi boundary
+        let a = U512::from_lo_hi(
+            U256::from_limbs([u64::MAX, u64::MAX, u64::MAX, u64::MAX]),
+            U256::ZERO,
+        );
+        let b = U512::from_lo_hi(U256::ONE, U256::ZERO);
+        let c = a.wrapping_add(&b);
+        assert_eq!(c.lo(), U256::ZERO);
+        assert_eq!(c.hi(), U256::ONE);
+    }
 }

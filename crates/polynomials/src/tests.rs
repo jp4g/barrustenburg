@@ -1491,3 +1491,51 @@ fn coeff_basis_serialization() {
     let result: Univariate<Bn254FrParams, 2> = deserialized.to_univariate();
     assert_eq!(result, original);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GateSeparatorPolynomial tests (from gate_separator_polynomial.test.cpp)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn gate_separator_partial_evaluation_consistency() {
+    // C++ GateSeparatorPolynomialTests::PartialEvaluationConsistency
+    // Create GateSeparatorPolynomial with random betas, partially evaluate with
+    // random challenges, verify result = product of (1 - u_i + u_i * beta_i)
+    let num_vars = 5;
+    let betas: Vec<Fr> = (0..num_vars).map(|_| Fr::random_element()).collect();
+    let challenges: Vec<Fr> = (0..num_vars).map(|_| Fr::random_element()).collect();
+
+    let mut poly = GateSeparatorPolynomial::new_verifier(betas.clone());
+    for &u in &challenges {
+        poly.partially_evaluate(u);
+    }
+
+    // Expected: product of ((1 - u_i) + u_i * beta_i) for i in 0..num_vars
+    let one = Fr::one();
+    let mut expected = one;
+    for i in 0..num_vars {
+        expected = expected * ((one - challenges[i]) + challenges[i] * betas[i]);
+    }
+
+    assert_eq!(
+        poly.partial_evaluation_result, expected,
+        "GateSeparator partial evaluation should equal product of (1-u+u*beta)"
+    );
+}
+
+#[test]
+fn gate_separator_beta_products_on_powers() {
+    // Verify that beta_products computed by prover constructor are correct.
+    // For log_num_monomials=3, betas=[b0,b1,b2], the table should contain
+    // partial products at appropriate stride.
+    let betas = vec![Fr::from(2u64), Fr::from(3u64), Fr::from(5u64)];
+    let log_n = 3;
+    let poly = GateSeparatorPolynomial::new(betas.clone(), log_n);
+
+    // beta_products is a power table: verify poly.at(0) is meaningful
+    // poly.at(idx) = beta_products[(idx >> 1) * periodicity]
+    // Initially periodicity=2, so at(0) = beta_products[0], at(2) = beta_products[2], etc.
+    let bp0 = poly.at(0);
+    // This should be the first entry of the subset products
+    assert!(!bp0.is_zero(), "beta_products[0] should not be zero");
+}

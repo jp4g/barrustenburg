@@ -151,4 +151,93 @@ mod tests {
         assert_eq!(hi, U256::ONE);
         assert_eq!(lo, U256::from_limbs([u64::MAX - 1, u64::MAX, u64::MAX, u64::MAX]));
     }
+
+    #[test]
+    fn u256_add() {
+        let a = U256::from_limbs([100, 0, 0, 0]);
+        let b = U256::from_limbs([200, 0, 0, 0]);
+        let c = a.wrapping_add(&b);
+        assert_eq!(c, U256::from_limbs([300, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u256_add_overflow() {
+        let a = U256::from_limbs([u64::MAX, 0, 0, 0]);
+        let b = U256::from_limbs([1, 0, 0, 0]);
+        let c = a.wrapping_add(&b);
+        assert_eq!(c, U256::from_limbs([0, 1, 0, 0]));
+    }
+
+    #[test]
+    fn u256_sub() {
+        let a = U256::from_limbs([300, 0, 0, 0]);
+        let b = U256::from_limbs([100, 0, 0, 0]);
+        let c = a.wrapping_sub(&b);
+        assert_eq!(c, U256::from_limbs([200, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u256_mul() {
+        let a = U256::from_limbs([7, 0, 0, 0]);
+        let b = U256::from_limbs([6, 0, 0, 0]);
+        let c = a.wrapping_mul(&b);
+        assert_eq!(c, U256::from_limbs([42, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u256_right_shift() {
+        let a = U256::from_limbs([0x100, 0, 0, 0]);
+        let b = a.wrapping_shr_vartime(4);
+        assert_eq!(b, U256::from_limbs([0x10, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u256_left_shift() {
+        let a = U256::from_limbs([0x10, 0, 0, 0]);
+        let b = a.wrapping_shl_vartime(4);
+        assert_eq!(b, U256::from_limbs([0x100, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u256_and() {
+        let a = U256::from_limbs([0xFF00, 0, 0, 0]);
+        let b = U256::from_limbs([0x0FF0, 0, 0, 0]);
+        let c = a.bitand(&b);
+        assert_eq!(c, U256::from_limbs([0x0F00, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u256_or() {
+        let a = U256::from_limbs([0xFF00, 0, 0, 0]);
+        let b = U256::from_limbs([0x00FF, 0, 0, 0]);
+        let c = a.bitor(&b);
+        assert_eq!(c, U256::from_limbs([0xFFFF, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u256_xor() {
+        let a = U256::from_limbs([0xFF00, 0, 0, 0]);
+        let b = U256::from_limbs([0x0FF0, 0, 0, 0]);
+        let c = a.bitxor(&b);
+        assert_eq!(c, U256::from_limbs([0xF0F0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn u256_equality() {
+        let a = U256::from_limbs([42, 0, 0, 0]);
+        let b = U256::from_limbs([42, 0, 0, 0]);
+        let c = U256::from_limbs([43, 0, 0, 0]);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn u256_ordering() {
+        let a = U256::from_limbs([42, 0, 0, 0]);
+        let b = U256::from_limbs([43, 0, 0, 0]);
+        assert!(a < b);
+        assert!(b > a);
+        assert!(a <= a);
+        assert!(a >= a);
+    }
 }

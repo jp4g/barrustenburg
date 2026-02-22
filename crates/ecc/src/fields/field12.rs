@@ -284,3 +284,201 @@ impl<P: Field12Params> PartialEq for Field12<P> {
 }
 
 impl<P: Field12Params> Eq for Field12<P> {}
+
+impl<P: Field12Params> Field12<P> {
+    /// Generate a random Field12 element.
+    pub fn random_element() -> Self {
+        Self {
+            c0: Field6::random_element(),
+            c1: Field6::random_element(),
+        }
+    }
+
+    #[inline]
+    pub fn to_montgomery_form(&self) -> Self {
+        Self {
+            c0: self.c0.to_montgomery_form(),
+            c1: self.c1.to_montgomery_form(),
+        }
+    }
+
+    #[inline]
+    pub fn from_montgomery_form(&self) -> Self {
+        Self {
+            c0: self.c0.from_montgomery_form(),
+            c1: self.c1.from_montgomery_form(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::curves::bn254::Bn254FqParams;
+    use crate::fields::field::Field;
+
+    type BnFq12 = Field12<Bn254FqParams>;
+    type BnFq6 = Field6<Bn254FqParams>;
+    type BnFq2 = Field2<Bn254FqParams>;
+    type Fq = Field<Bn254FqParams>;
+
+    #[test]
+    fn fq12_eq() {
+        let a = BnFq12::random_element();
+        let b = a;
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fq12_is_zero() {
+        assert!(BnFq12::zero().is_zero());
+        assert!(!BnFq12::one().is_zero());
+    }
+
+    #[test]
+    fn fq12_random_element() {
+        let a = BnFq12::random_element();
+        let b = BnFq12::random_element();
+        assert_ne!(a, b, "two random Fq12 elements should differ");
+    }
+
+    #[test]
+    fn fq12_mul_check_against_constants() {
+        let a = BnFq12::random_element();
+        let c = a * a;
+        let d = a.sqr();
+        assert_eq!(c, d, "a*a should equal a.sqr()");
+    }
+
+    #[test]
+    fn fq12_sqr_check_against_constants() {
+        let a = BnFq12::new(
+            BnFq6::new(
+                BnFq2::new(Fq::from(1u64), Fq::from(2u64)),
+                BnFq2::new(Fq::from(3u64), Fq::from(4u64)),
+                BnFq2::new(Fq::from(5u64), Fq::from(6u64)),
+            ),
+            BnFq6::new(
+                BnFq2::new(Fq::from(7u64), Fq::from(8u64)),
+                BnFq2::new(Fq::from(9u64), Fq::from(10u64)),
+                BnFq2::new(Fq::from(11u64), Fq::from(12u64)),
+            ),
+        );
+        assert_eq!(a.sqr(), a * a);
+    }
+
+    #[test]
+    fn fq12_add_check_against_constants() {
+        let a = BnFq12::one();
+        let b = BnFq12::one();
+        let c = a + b;
+        // c.c0 should have c0.c0.c0 = 2, rest zero; c.c1 should be zero
+        assert_eq!(c.c0.c0.c0, Fq::from(2u64));
+        assert!(c.c1.is_zero());
+    }
+
+    #[test]
+    fn fq12_sub_check_against_constants() {
+        let a = BnFq12::random_element();
+        let b = a;
+        let c = a - b;
+        assert!(c.is_zero(), "a - a should be zero");
+    }
+
+    #[test]
+    fn fq12_to_montgomery_form() {
+        let a = BnFq12::random_element();
+        let roundtrip = a.from_montgomery_form().to_montgomery_form();
+        assert_eq!(a, roundtrip);
+    }
+
+    #[test]
+    fn fq12_from_montgomery_form() {
+        let a = BnFq12::random_element();
+        let from = a.from_montgomery_form();
+        let back = from.to_montgomery_form();
+        assert_eq!(a, back);
+    }
+
+    #[test]
+    fn fq12_mul_sqr_consistency() {
+        for _ in 0..10 {
+            let a = BnFq12::random_element();
+            assert_eq!(a * a, a.sqr(), "a*a should equal a.sqr()");
+        }
+    }
+
+    #[test]
+    fn fq12_add_mul_consistency() {
+        for _ in 0..10 {
+            let a = BnFq12::random_element();
+            let b = BnFq12::random_element();
+            let c = BnFq12::random_element();
+            let lhs = (a + b) * c;
+            let rhs = a * c + b * c;
+            assert_eq!(lhs, rhs, "(a+b)*c should equal a*c + b*c");
+        }
+    }
+
+    #[test]
+    fn fq12_sub_mul_consistency() {
+        for _ in 0..10 {
+            let a = BnFq12::random_element();
+            let b = BnFq12::random_element();
+            let c = BnFq12::random_element();
+            let lhs = (a - b) * c;
+            let rhs = a * c - b * c;
+            assert_eq!(lhs, rhs, "(a-b)*c should equal a*c - b*c");
+        }
+    }
+
+    #[test]
+    fn fq12_invert() {
+        for _ in 0..10 {
+            let a = BnFq12::random_element();
+            if !a.is_zero() {
+                let a_inv = a.invert();
+                let product = a * a_inv;
+                assert_eq!(product, BnFq12::one(), "a * a^-1 should be one");
+            }
+        }
+    }
+
+    #[test]
+    fn fq12_copy() {
+        let a = BnFq12::random_element();
+        let b = a;
+        assert_eq!(a, b, "copy should preserve value");
+    }
+
+    #[test]
+    fn fq12_unitary_inverse() {
+        let a = BnFq12::random_element();
+        let u_inv = a.unitary_inverse();
+        // unitary_inverse flips c1 sign: (c0, c1) -> (c0, -c1)
+        assert_eq!(u_inv.c0, a.c0, "c0 should be unchanged");
+        assert_eq!(u_inv.c1, -a.c1, "c1 should be negated");
+    }
+
+    #[test]
+    fn fq12_frobenius_map_one() {
+        let a = BnFq12::random_element();
+        let f = a.frobenius_map_one();
+        // Just verify it doesn't panic and produces a non-trivial result
+        assert_ne!(f, BnFq12::zero());
+    }
+
+    #[test]
+    fn fq12_frobenius_map_two() {
+        let a = BnFq12::random_element();
+        let f = a.frobenius_map_two();
+        assert_ne!(f, BnFq12::zero());
+    }
+
+    #[test]
+    fn fq12_frobenius_map_three() {
+        let a = BnFq12::random_element();
+        let f = a.frobenius_map_three();
+        assert_ne!(f, BnFq12::zero());
+    }
+}

@@ -7,8 +7,7 @@ use bbrs_ecc::fields::field::Field;
 use bbrs_ecc::fields::field_params::FieldParams;
 
 /// Number of wire/selector/entity values. Matches C++ `InputElements::NUM_ELEMENTS = 45`.
-/// We use 42 to match the actual named fields (the C++ test uses up to index 41).
-pub const NUM_ELEMENTS: usize = 42;
+pub const NUM_ELEMENTS: usize = 45;
 
 /// Input elements for Ultra relation accumulation.
 ///
@@ -100,6 +99,11 @@ impl<P: FieldParams> InputElements<P> {
     // Shifted grand products
     pub fn z_perm_shift(&self) -> Field<P> { self.data[40] }
     pub fn z_lookup_shift(&self) -> Field<P> { self.data[41] }
+
+    // Lookup-specific fields
+    pub fn lookup_read_counts(&self) -> Field<P> { self.data[42] }
+    pub fn lookup_read_tags(&self) -> Field<P> { self.data[43] }
+    pub fn lookup_inverses(&self) -> Field<P> { self.data[44] }
 
     // Mutable setters for specific overrides in tests
     pub fn set_q_arith(&mut self, val: Field<P>) { self.data[6] = val; }

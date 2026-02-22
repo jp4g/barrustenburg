@@ -1,4 +1,4 @@
-use crate::curves::bn254::{Bn254FqParams, Bn254FrParams, Bn254G1Params, Fq, Fr};
+use crate::curves::bn254::{Bn254FqParams, Bn254FrParams, Bn254G1Params, Fq, Fq2, Fr, G2AffineElement, G2Element};
 use crate::curves::grumpkin::GrumpkinG1Params;
 use crate::curves::secp256k1::{
     Secp256k1FqParams, Secp256k1FrParams, Secp256k1G1Params, Secp256k1Fr,
@@ -1635,6 +1635,164 @@ fn grumpkin_mul_with_endomorphism_matches_basic() {
     }
 }
 
+#[test]
+fn grumpkin_random_element() {
+    let p = Element::<GrumpkinG1Params>::random_element();
+    assert!(p.on_curve(), "Grumpkin random element should be on curve");
+    assert!(!p.is_point_at_infinity(), "random element should not be infinity");
+}
+
+#[test]
+fn grumpkin_random_affine_element() {
+    let p = Element::<GrumpkinG1Params>::random_element().to_affine();
+    assert!(p.on_curve(), "Grumpkin random affine element should be on curve");
+}
+
+#[test]
+fn grumpkin_eq() {
+    let a = Element::<GrumpkinG1Params>::random_element();
+    let a_norm = a.normalize();
+    assert_eq!(a, a_norm, "a should equal a.normalize()");
+    let inf1 = Element::<GrumpkinG1Params>::infinity();
+    let inf2 = Element::<GrumpkinG1Params>::infinity();
+    assert_eq!(inf1, inf2, "infinity == infinity");
+    assert_ne!(a, inf1, "point != infinity");
+}
+
+#[test]
+fn grumpkin_add_exception_infinity() {
+    let a = Element::<GrumpkinG1Params>::random_element();
+    let neg_a = -a;
+    let inf = Element::<GrumpkinG1Params>::infinity();
+    let result = a + neg_a;
+    assert!(result.is_point_at_infinity(), "a + (-a) should be infinity");
+    assert_eq!(inf + a, a, "inf + a should be a");
+    assert_eq!(a + inf, a, "a + inf should be a");
+}
+
+#[test]
+fn grumpkin_add_exception_dbl() {
+    let a = Element::<GrumpkinG1Params>::random_element();
+    let result = a + a;
+    let expected = a.dbl();
+    assert_eq!(result, expected, "a + a should equal a.dbl()");
+}
+
+#[test]
+fn grumpkin_add_dbl_consistency() {
+    let a = Element::<GrumpkinG1Params>::random_element();
+    let d2 = a.dbl();
+    let d4 = d2.dbl();
+    let d8 = d4.dbl();
+    let d8_add = d4 + d4;
+    assert_eq!(d8, d8_add, "Grumpkin doubling chain 8P should match add chain");
+}
+
+#[test]
+fn grumpkin_add_dbl_consistency_repeated() {
+    let a = Element::<GrumpkinG1Params>::random_element();
+    let b = a.dbl();
+    let c = b + a;
+    let d = c + a;
+    let e = d + a;
+    let f = e + a;
+    let g = f + a;
+    let h = g + a;
+    let b2 = a.dbl();
+    let c2 = b2.dbl();
+    let d2 = c2.dbl();
+    let e2 = d2 - c2;
+    let f2 = e2 + b2;
+    let g2 = f2 - a;
+    let h2 = g2 - a.dbl().dbl();
+    assert_eq!(b, b2, "Grumpkin 2a mismatch");
+    assert_eq!(d, c2, "Grumpkin 4a mismatch");
+    assert_eq!(h, d2, "Grumpkin 8a mismatch");
+    assert_eq!(d, e2, "Grumpkin 4a via sub mismatch");
+    assert_eq!(f, f2, "Grumpkin 6a mismatch");
+    assert_eq!(e, g2, "Grumpkin 5a mismatch");
+    assert_eq!(a, h2, "Grumpkin 1a via sub mismatch");
+}
+
+#[test]
+fn grumpkin_mixed_add_exception_infinity() {
+    let a = Element::<GrumpkinG1Params>::random_element();
+    let a_aff = a.to_affine();
+    let neg_a_aff = (-a).to_affine();
+    let inf = Element::<GrumpkinG1Params>::infinity();
+    let result = a + neg_a_aff;
+    assert!(result.is_point_at_infinity(), "Grumpkin a + (-a_affine) should be infinity");
+    let result2 = inf + a_aff;
+    assert_eq!(result2.to_affine(), a_aff, "Grumpkin inf + a_affine should be a");
+}
+
+#[test]
+fn grumpkin_mixed_add_exception_dbl() {
+    let a = Element::<GrumpkinG1Params>::random_element();
+    let a_aff = a.to_affine();
+    let result = a + a_aff;
+    let expected = a.dbl();
+    assert_eq!(result, expected, "Grumpkin a + a_affine should equal a.dbl()");
+}
+
+#[test]
+fn grumpkin_add_mixed_add_consistency() {
+    let a = Element::<GrumpkinG1Params>::random_element();
+    let b = Element::<GrumpkinG1Params>::random_element();
+    let b_aff = b.to_affine();
+    let via_proj = a + b;
+    let via_mixed = a + b_aff;
+    assert_eq!(via_proj, via_mixed, "Grumpkin projective add should match mixed add");
+}
+
+#[test]
+fn grumpkin_on_curve_random() {
+    for _ in 0..100 {
+        let p = Element::<GrumpkinG1Params>::random_element();
+        assert!(p.on_curve(), "Grumpkin random element should be on curve");
+    }
+}
+
+#[test]
+fn grumpkin_batch_normalize() {
+    type GrumpkinFr = Field<Bn254FqParams>;
+    let g = Element::<GrumpkinG1Params>::one();
+    let num_points = 2;
+    let mut points: Vec<Element<GrumpkinG1Params>> = Vec::new();
+    let mut normalized: Vec<Element<GrumpkinG1Params>> = Vec::new();
+    for _ in 0..num_points {
+        let a = g.mul_without_endomorphism(&GrumpkinFr::random_element());
+        let b = g.mul_without_endomorphism(&GrumpkinFr::random_element());
+        let point = a + b;
+        points.push(point);
+        normalized.push(point);
+    }
+    Element::batch_normalize(&mut normalized);
+    for i in 0..num_points {
+        let zz = points[i].z.sqr();
+        let zzz = points[i].z * zz;
+        let result_x = normalized[i].x * zz;
+        let result_y = normalized[i].y * zzz;
+        assert_eq!(result_x, points[i].x, "Grumpkin batch_normalize x mismatch at {}", i);
+        assert_eq!(result_y, points[i].y, "Grumpkin batch_normalize y mismatch at {}", i);
+    }
+}
+
+#[test]
+fn grumpkin_group_exponentiation_consistency() {
+    type GrumpkinFr = Field<Bn254FqParams>;
+    for _ in 0..10 {
+        let a = GrumpkinFr::random_element();
+        let b = GrumpkinFr::random_element();
+        let g = Element::<GrumpkinG1Params>::one();
+        let ga = g.mul(&a);
+        let gab = ga.mul(&b);
+        let ab = a * b;
+        let g_ab = g.mul(&ab);
+        assert_eq!(gab, g_ab, "Grumpkin (G*a)*b should equal G*(a*b)");
+    }
+}
+
 // --- secp256k1 group tests ---
 
 #[test]
@@ -2115,5 +2273,481 @@ fn batched_affine_odd_lengths() {
     for (i, (result, expected)) in results.iter().zip(expected_sums.iter()).enumerate() {
         assert_eq!(result.x, expected.x, "odd seq {} x mismatch", i);
         assert_eq!(result.y, expected.y, "odd seq {} y mismatch", i);
+    }
+}
+
+// =========================================================================
+// G2 group tests — BN254 G2 over Fq2
+// =========================================================================
+
+#[test]
+fn g2_random_element() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let mut p = g.dbl();
+    p.add_assign_element(&g);
+    let aff = p.to_affine();
+    assert!(!aff.is_point_at_infinity(), "non-trivial G2 point should not be infinity");
+}
+
+#[test]
+fn g2_eq() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let a = g.dbl();
+    let mut b = g;
+    b.add_assign_element(&g);
+    assert_eq!(a.to_affine().x, b.to_affine().x, "G2 dbl should equal add self");
+    assert_eq!(a.to_affine().y, b.to_affine().y);
+}
+
+#[test]
+fn g2_add_exception_infinity() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let neg_g = -g;
+    let mut result = g;
+    result.add_assign_element(&neg_g);
+    assert!(result.is_point_at_infinity(), "G2 g + (-g) should be infinity");
+}
+
+#[test]
+fn g2_add_exception_dbl() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let mut result = g;
+    result.add_assign_element(&g);
+    let dbl = g.dbl();
+    assert_eq!(result.to_affine().x, dbl.to_affine().x, "G2 add self should equal dbl");
+    assert_eq!(result.to_affine().y, dbl.to_affine().y);
+}
+
+#[test]
+fn g2_add_dbl_consistency() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let d2 = g.dbl();
+    let d4 = d2.dbl();
+    let d8 = d4.dbl();
+    let mut d8_add = d4;
+    d8_add.add_assign_element(&d4);
+    assert_eq!(d8.to_affine().x, d8_add.to_affine().x, "G2 8P dbl vs add");
+    assert_eq!(d8.to_affine().y, d8_add.to_affine().y);
+}
+
+#[test]
+fn g2_add_dbl_consistency_repeated() {
+    let a = G2Element::from_affine(&G2AffineElement::generator());
+    let b = a.dbl();
+    let mut c = b;
+    c.add_assign_element(&a);
+    let mut d = c;
+    d.add_assign_element(&a);
+    let b2 = a.dbl();
+    let c2 = b2.dbl();
+    assert_eq!(b.to_affine().x, b2.to_affine().x, "G2 2a");
+    assert_eq!(d.to_affine().x, c2.to_affine().x, "G2 4a");
+}
+
+#[test]
+fn g2_add_infinity_identity() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let inf = G2Element::infinity();
+    let mut r1 = g;
+    r1.add_assign_element(&inf);
+    assert_eq!(r1.to_affine().x, g.to_affine().x, "G2 g + inf = g");
+    let mut r2 = inf;
+    r2.add_assign_element(&g);
+    assert_eq!(r2.to_affine().x, g.to_affine().x, "G2 inf + g = g");
+}
+
+#[test]
+fn g2_to_affine_roundtrip() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let doubled = g.dbl();
+    let aff = doubled.to_affine();
+    let back = G2Element::from_affine(&aff);
+    assert_eq!(back.to_affine().x, aff.x, "G2 affine roundtrip x");
+    assert_eq!(back.to_affine().y, aff.y, "G2 affine roundtrip y");
+}
+
+#[test]
+fn g2_infinity_is_infinity() {
+    let inf = G2Element::infinity();
+    assert!(inf.is_point_at_infinity());
+    let inf_aff = G2AffineElement::infinity();
+    assert!(inf_aff.is_point_at_infinity());
+}
+
+#[test]
+fn g2_negation() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let neg_g = -g;
+    assert_eq!(neg_g.x, g.x, "negation should preserve x");
+    assert_eq!(neg_g.y, -g.y, "negation should negate y");
+}
+
+#[test]
+fn g2_mul_scalar_small() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let three_g = g.mul_scalar(&Fr::from(3u64));
+    let mut expected = g.dbl();
+    expected.add_assign_element(&g);
+    assert_eq!(three_g.to_affine().x, expected.to_affine().x, "3*G via scalar_mul");
+    assert_eq!(three_g.to_affine().y, expected.to_affine().y);
+}
+
+#[test]
+fn g2_mul_scalar_zero() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let result = g.mul_scalar(&Fr::zero());
+    assert!(result.is_point_at_infinity(), "0*G should be infinity");
+}
+
+#[test]
+fn g2_mul_scalar_one() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let result = g.mul_scalar(&Fr::one());
+    assert_eq!(result.to_affine().x, g.to_affine().x, "1*G should be G");
+    assert_eq!(result.to_affine().y, g.to_affine().y);
+}
+
+#[test]
+fn g2_exponentiation_consistency() {
+    let g = G2Element::from_affine(&G2AffineElement::generator());
+    let a = Fr::from(5u64);
+    let b = Fr::from(7u64);
+    let ga = g.mul_scalar(&a);
+    let gab = ga.mul_scalar(&b);
+    let ab = a * b; // 35
+    let g_ab = g.mul_scalar(&ab);
+    assert_eq!(gab.to_affine().x, g_ab.to_affine().x, "G2 (G*a)*b = G*(a*b)");
+    assert_eq!(gab.to_affine().y, g_ab.to_affine().y);
+}
+
+#[test]
+fn g2_on_curve_generator() {
+    // Verify generator satisfies y^2 = x^3 + b'
+    let g2_gen = G2AffineElement::generator();
+    let b_twist = Fq2::twist_coeff_b();
+    let y_sq = g2_gen.y.sqr();
+    let x_cubed = g2_gen.x.sqr() * g2_gen.x;
+    let rhs = x_cubed + b_twist;
+    assert_eq!(y_sq, rhs, "G2 generator should satisfy curve equation");
+}
+
+// =========================================================================
+// Additional field tests — Fr, Fq, secp256k1, secp256r1
+// =========================================================================
+
+#[test]
+fn bn254_fr_multiplicative_generator() {
+    // The primitive root (multiplicative generator) should have multiplicative order p-1
+    // Verify it's not 0 or 1
+    let g = Fr::from_raw(Bn254FrParams::PRIMITIVE_ROOT);
+    assert!(!g.is_zero(), "multiplicative generator should not be zero");
+    let mont = g.to_montgomery_form();
+    assert_ne!(mont, Fr::one(), "multiplicative generator should not be one");
+}
+
+#[test]
+fn bn254_fr_uint256_conversions() {
+    let a = Fr::random_element();
+    let raw = a.from_montgomery_form();
+    let back = raw.to_montgomery_form();
+    assert_eq!(a, back, "Fr to/from raw roundtrip should be consistent");
+}
+
+#[test]
+fn bn254_fr_equivalent_randomness() {
+    // Two random elements should not be equal (probabilistically)
+    let a = Fr::random_element();
+    let b = Fr::random_element();
+    assert_ne!(a, b, "two random Fr elements should differ");
+}
+
+#[test]
+fn bn254_fq_multiplicative_generator() {
+    // Verify Fq cube root is not trivial
+    let cube_root = Fq::cube_root_of_unity();
+    assert_ne!(cube_root, Fq::one());
+    assert_eq!(cube_root * cube_root * cube_root, Fq::one());
+}
+
+#[test]
+fn bn254_fq_serialize_to_buffer() {
+    let a = Fq::random_element();
+    let bytes = a.to_be_bytes();
+    let recovered = Fq::from_be_bytes(&bytes);
+    assert_eq!(a, recovered, "Fq serialization roundtrip");
+}
+
+#[test]
+fn bn254_fq_equivalent_randomness() {
+    let a = Fq::random_element();
+    let b = Fq::random_element();
+    assert_ne!(a, b, "two random Fq elements should differ");
+}
+
+#[test]
+fn bn254_fq_neg_and_self_neg_zero() {
+    let zero = Fq::zero();
+    let neg_zero = zero.negate();
+    assert_eq!(zero, neg_zero, "-0 should equal 0 for Fq");
+}
+
+#[test]
+fn bn254_fq_pow_regression() {
+    let a = Fq::from(7u64);
+    let a_cubed = a.pow(&[3, 0, 0, 0]);
+    assert_eq!(a_cubed, Fq::from(343u64), "7^3 should be 343");
+}
+
+#[test]
+fn bn254_fq_sqr_regression() {
+    let a = Fq::from(12345u64);
+    assert_eq!(a.sqr(), a * a, "sqr should match mul for regression value");
+}
+
+// --- secp256k1 additional field tests ---
+
+#[test]
+fn secp256k1_fq_eq() {
+    type K1Fq = Field<Secp256k1FqParams>;
+    let a = K1Fq::from(42u64);
+    let b = K1Fq::from(42u64);
+    assert_eq!(a, b);
+    let c = K1Fq::from(43u64);
+    assert_ne!(a, c);
+}
+
+#[test]
+fn secp256k1_fq_is_zero() {
+    type K1Fq = Field<Secp256k1FqParams>;
+    assert!(K1Fq::zero().is_zero());
+    assert!(!K1Fq::one().is_zero());
+}
+
+#[test]
+fn secp256k1_fq_random_element() {
+    type K1Fq = Field<Secp256k1FqParams>;
+    let a = K1Fq::random_element();
+    let b = K1Fq::random_element();
+    assert_ne!(a, b);
+}
+
+#[test]
+fn secp256k1_fq_sqr_equals_mul() {
+    type K1Fq = Field<Secp256k1FqParams>;
+    for _ in 0..100 {
+        let a = K1Fq::random_element();
+        assert_eq!(a.sqr(), a * a);
+    }
+}
+
+#[test]
+fn secp256k1_fq_add_mul_consistency() {
+    type K1Fq = Field<Secp256k1FqParams>;
+    for _ in 0..100 {
+        let a = K1Fq::random_element();
+        let b = K1Fq::random_element();
+        let c = K1Fq::random_element();
+        assert_eq!((a + b) * c, a * c + b * c);
+    }
+}
+
+#[test]
+fn secp256k1_fq_sub_mul_consistency() {
+    type K1Fq = Field<Secp256k1FqParams>;
+    for _ in 0..100 {
+        let a = K1Fq::random_element();
+        let b = K1Fq::random_element();
+        let c = K1Fq::random_element();
+        assert_eq!((a - b) * c, a * c - b * c);
+    }
+}
+
+#[test]
+fn secp256k1_fq_invert() {
+    type K1Fq = Field<Secp256k1FqParams>;
+    for _ in 0..100 {
+        let a = K1Fq::random_element();
+        if !a.is_zero() {
+            assert_eq!(a * a.invert(), K1Fq::one());
+        }
+    }
+}
+
+#[test]
+fn secp256k1_fq_sqrt() {
+    type K1Fq = Field<Secp256k1FqParams>;
+    for _ in 0..100 {
+        let a = K1Fq::random_element();
+        let a_sq = a.sqr();
+        let (found, root) = a_sq.sqrt();
+        assert!(found);
+        assert!(root == a || root == a.negate());
+    }
+}
+
+#[test]
+fn secp256k1_fr_eq() {
+    let a = Secp256k1Fr::from(42u64);
+    let b = Secp256k1Fr::from(42u64);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn secp256k1_fr_add_mul_consistency() {
+    for _ in 0..100 {
+        let a = Secp256k1Fr::random_element();
+        let b = Secp256k1Fr::random_element();
+        let c = Secp256k1Fr::random_element();
+        assert_eq!((a + b) * c, a * c + b * c);
+    }
+}
+
+#[test]
+fn secp256k1_fr_sub_mul_consistency() {
+    for _ in 0..100 {
+        let a = Secp256k1Fr::random_element();
+        let b = Secp256k1Fr::random_element();
+        let c = Secp256k1Fr::random_element();
+        assert_eq!((a - b) * c, a * c - b * c);
+    }
+}
+
+#[test]
+fn secp256k1_fr_invert() {
+    for _ in 0..100 {
+        let a = Secp256k1Fr::random_element();
+        if !a.is_zero() {
+            assert_eq!(a * a.invert(), Secp256k1Fr::one());
+        }
+    }
+}
+
+// --- secp256r1 additional field tests ---
+
+#[test]
+fn secp256r1_fq_eq() {
+    type R1Fq = Field<Secp256r1FqParams>;
+    let a = R1Fq::from(42u64);
+    let b = R1Fq::from(42u64);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn secp256r1_fq_is_zero() {
+    type R1Fq = Field<Secp256r1FqParams>;
+    assert!(R1Fq::zero().is_zero());
+    assert!(!R1Fq::one().is_zero());
+}
+
+#[test]
+fn secp256r1_fq_random_element() {
+    type R1Fq = Field<Secp256r1FqParams>;
+    let a = R1Fq::random_element();
+    let b = R1Fq::random_element();
+    assert_ne!(a, b);
+}
+
+#[test]
+fn secp256r1_fq_sqr_consistency() {
+    type R1Fq = Field<Secp256r1FqParams>;
+    for _ in 0..100 {
+        let a = R1Fq::random_element();
+        assert_eq!(a.sqr(), a * a);
+    }
+}
+
+#[test]
+fn secp256r1_fq_add_mul_consistency() {
+    type R1Fq = Field<Secp256r1FqParams>;
+    for _ in 0..100 {
+        let a = R1Fq::random_element();
+        let b = R1Fq::random_element();
+        let c = R1Fq::random_element();
+        assert_eq!((a + b) * c, a * c + b * c);
+    }
+}
+
+#[test]
+fn secp256r1_fq_sub_mul_consistency() {
+    type R1Fq = Field<Secp256r1FqParams>;
+    for _ in 0..100 {
+        let a = R1Fq::random_element();
+        let b = R1Fq::random_element();
+        let c = R1Fq::random_element();
+        assert_eq!((a - b) * c, a * c - b * c);
+    }
+}
+
+#[test]
+fn secp256r1_fq_invert() {
+    type R1Fq = Field<Secp256r1FqParams>;
+    for _ in 0..100 {
+        let a = R1Fq::random_element();
+        if !a.is_zero() {
+            assert_eq!(a * a.invert(), R1Fq::one());
+        }
+    }
+}
+
+#[test]
+fn secp256r1_fq_sqrt() {
+    type R1Fq = Field<Secp256r1FqParams>;
+    for _ in 0..100 {
+        let a = R1Fq::random_element();
+        let a_sq = a.sqr();
+        let (found, root) = a_sq.sqrt();
+        assert!(found);
+        assert!(root == a || root == a.negate());
+    }
+}
+
+#[test]
+fn secp256r1_fr_eq() {
+    type R1Fr = Field<Secp256r1FrParams>;
+    let a = R1Fr::from(42u64);
+    let b = R1Fr::from(42u64);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn secp256r1_fr_add_mul_consistency() {
+    type R1Fr = Field<Secp256r1FrParams>;
+    for _ in 0..100 {
+        let a = R1Fr::random_element();
+        let b = R1Fr::random_element();
+        let c = R1Fr::random_element();
+        assert_eq!((a + b) * c, a * c + b * c);
+    }
+}
+
+#[test]
+fn secp256r1_fr_sub_mul_consistency() {
+    type R1Fr = Field<Secp256r1FrParams>;
+    for _ in 0..100 {
+        let a = R1Fr::random_element();
+        let b = R1Fr::random_element();
+        let c = R1Fr::random_element();
+        assert_eq!((a - b) * c, a * c - b * c);
+    }
+}
+
+#[test]
+fn secp256r1_fr_invert() {
+    type R1Fr = Field<Secp256r1FrParams>;
+    for _ in 0..100 {
+        let a = R1Fr::random_element();
+        if !a.is_zero() {
+            assert_eq!(a * a.invert(), R1Fr::one());
+        }
+    }
+}
+
+#[test]
+fn secp256r1_fr_montgomery_roundtrip() {
+    type R1Fr = Field<Secp256r1FrParams>;
+    for _ in 0..100 {
+        let a = R1Fr::random_element();
+        let roundtrip = a.from_montgomery_form().to_montgomery_form();
+        assert_eq!(a, roundtrip);
     }
 }

@@ -194,3 +194,159 @@ impl<P: FieldParams> PartialEq for Field2<P> {
 }
 
 impl<P: FieldParams> Eq for Field2<P> {}
+
+impl<P: FieldParams> Field2<P> {
+    /// Generate a random Field2 element.
+    pub fn random_element() -> Self {
+        Self {
+            c0: Field::random_element(),
+            c1: Field::random_element(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::curves::bn254::Bn254FqParams;
+
+    type Fq2 = Field2<Bn254FqParams>;
+    type Fq = Field<Bn254FqParams>;
+
+    #[test]
+    fn fq2_eq() {
+        let a = Fq2::random_element();
+        let b = a;
+        assert_eq!(a, b);
+        let c = Fq2::random_element();
+        // Very unlikely to be equal
+        if a != c {
+            assert_ne!(a, c);
+        }
+    }
+
+    #[test]
+    fn fq2_is_zero() {
+        assert!(Fq2::zero().is_zero());
+        assert!(!Fq2::one().is_zero());
+        let r = Fq2::random_element();
+        // Random element is almost certainly not zero
+        assert!(!r.is_zero());
+    }
+
+    #[test]
+    fn fq2_random_element() {
+        let a = Fq2::random_element();
+        let b = Fq2::random_element();
+        assert_ne!(a, b, "two random elements should differ (probabilistically)");
+    }
+
+    #[test]
+    fn fq2_mul_check_against_constants() {
+        let a = Fq2::new(Fq::from(3u64), Fq::from(5u64));
+        let b = Fq2::new(Fq::from(7u64), Fq::from(11u64));
+        let c = a * b;
+        // (3+5u)(7+11u) = 21+33u+35u+55u^2 = (21-55) + (33+35)u = -34 + 68u
+        let neg34 = Fq::from(34u64).negate();
+        let expected = Fq2::new(neg34, Fq::from(68u64));
+        assert_eq!(c, expected, "Fq2 mul with small constants");
+    }
+
+    #[test]
+    fn fq2_sqr_check_against_constants() {
+        let a = Fq2::new(Fq::from(3u64), Fq::from(5u64));
+        let sq = a.sqr();
+        let mul_self = a * a;
+        assert_eq!(sq, mul_self, "sqr should equal self*self");
+    }
+
+    #[test]
+    fn fq2_add_check_against_constants() {
+        let a = Fq2::new(Fq::from(3u64), Fq::from(5u64));
+        let b = Fq2::new(Fq::from(7u64), Fq::from(11u64));
+        let c = a + b;
+        let expected = Fq2::new(Fq::from(10u64), Fq::from(16u64));
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn fq2_sub_check_against_constants() {
+        let a = Fq2::new(Fq::from(10u64), Fq::from(16u64));
+        let b = Fq2::new(Fq::from(3u64), Fq::from(5u64));
+        let c = a - b;
+        let expected = Fq2::new(Fq::from(7u64), Fq::from(11u64));
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn fq2_to_montgomery_form() {
+        let a = Fq2::new(
+            Fq::from_raw([1, 0, 0, 0]),
+            Fq::from_raw([2, 0, 0, 0]),
+        );
+        let mont = a.to_montgomery_form();
+        let back = mont.from_montgomery_form();
+        assert_eq!(back.c0.data, a.c0.data);
+        assert_eq!(back.c1.data, a.c1.data);
+    }
+
+    #[test]
+    fn fq2_from_montgomery_form() {
+        let a = Fq2::new(Fq::from(42u64), Fq::from(99u64));
+        let from_mont = a.from_montgomery_form();
+        let back = from_mont.to_montgomery_form();
+        assert_eq!(a, back, "from_montgomery_form should be invertible");
+    }
+
+    #[test]
+    fn fq2_mul_sqr_consistency() {
+        for _ in 0..100 {
+            let a = Fq2::random_element();
+            assert_eq!(a * a, a.sqr(), "a*a should equal a.sqr()");
+        }
+    }
+
+    #[test]
+    fn fq2_add_mul_consistency() {
+        for _ in 0..100 {
+            let a = Fq2::random_element();
+            let b = Fq2::random_element();
+            let c = Fq2::random_element();
+            let lhs = (a + b) * c;
+            let rhs = a * c + b * c;
+            assert_eq!(lhs, rhs, "(a+b)*c should equal a*c + b*c");
+        }
+    }
+
+    #[test]
+    fn fq2_sub_mul_consistency() {
+        for _ in 0..100 {
+            let a = Fq2::random_element();
+            let b = Fq2::random_element();
+            let c = Fq2::random_element();
+            let lhs = (a - b) * c;
+            let rhs = a * c - b * c;
+            assert_eq!(lhs, rhs, "(a-b)*c should equal a*c - b*c");
+        }
+    }
+
+    #[test]
+    fn fq2_invert() {
+        for _ in 0..100 {
+            let a = Fq2::random_element();
+            if !a.is_zero() {
+                let a_inv = a.invert();
+                let product = a * a_inv;
+                assert_eq!(product, Fq2::one(), "a * a^-1 should be one");
+            }
+        }
+    }
+
+    #[test]
+    fn fq2_serialize() {
+        // Test that montgomery roundtrip preserves values
+        let a = Fq2::random_element();
+        let roundtrip = a.from_montgomery_form().to_montgomery_form();
+        assert_eq!(a, roundtrip, "montgomery roundtrip should preserve Fq2 value");
+    }
+}

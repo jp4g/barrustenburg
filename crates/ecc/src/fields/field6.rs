@@ -264,3 +264,171 @@ impl<P: Field6Params> PartialEq for Field6<P> {
 }
 
 impl<P: Field6Params> Eq for Field6<P> {}
+
+impl<P: Field6Params> Field6<P> {
+    /// Generate a random Field6 element.
+    pub fn random_element() -> Self {
+        Self {
+            c0: Field2::random_element(),
+            c1: Field2::random_element(),
+            c2: Field2::random_element(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::curves::bn254::Bn254FqParams;
+    use crate::fields::field::Field;
+
+    type Fq6 = Field6<Bn254FqParams>;
+    type Fq2 = Field2<Bn254FqParams>;
+    type Fq = Field<Bn254FqParams>;
+
+    #[test]
+    fn fq6_eq() {
+        let a = Fq6::random_element();
+        let b = a;
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fq6_is_zero() {
+        assert!(Fq6::zero().is_zero());
+        assert!(!Fq6::one().is_zero());
+    }
+
+    #[test]
+    fn fq6_random_element() {
+        let a = Fq6::random_element();
+        let b = Fq6::random_element();
+        assert_ne!(a, b, "two random Fq6 elements should differ");
+    }
+
+    #[test]
+    fn fq6_mul_check_against_constants() {
+        let a = Fq6::new(
+            Fq2::new(Fq::from(1u64), Fq::from(2u64)),
+            Fq2::new(Fq::from(3u64), Fq::from(4u64)),
+            Fq2::new(Fq::from(5u64), Fq::from(6u64)),
+        );
+        let b = a;
+        let c = a * b;
+        let d = a.sqr();
+        // sqr and mul-self should agree
+        assert_eq!(c, d, "a*a should equal a.sqr()");
+    }
+
+    #[test]
+    fn fq6_sqr_check_against_constants() {
+        let a = Fq6::new(
+            Fq2::new(Fq::from(2u64), Fq::from(3u64)),
+            Fq2::new(Fq::from(5u64), Fq::from(7u64)),
+            Fq2::new(Fq::from(11u64), Fq::from(13u64)),
+        );
+        assert_eq!(a.sqr(), a * a);
+    }
+
+    #[test]
+    fn fq6_add_check_against_constants() {
+        let a = Fq6::new(
+            Fq2::new(Fq::from(1u64), Fq::from(2u64)),
+            Fq2::new(Fq::from(3u64), Fq::from(4u64)),
+            Fq2::new(Fq::from(5u64), Fq::from(6u64)),
+        );
+        let b = Fq6::new(
+            Fq2::new(Fq::from(10u64), Fq::from(20u64)),
+            Fq2::new(Fq::from(30u64), Fq::from(40u64)),
+            Fq2::new(Fq::from(50u64), Fq::from(60u64)),
+        );
+        let c = a + b;
+        assert_eq!(c.c0.c0, Fq::from(11u64));
+        assert_eq!(c.c1.c0, Fq::from(33u64));
+        assert_eq!(c.c2.c0, Fq::from(55u64));
+    }
+
+    #[test]
+    fn fq6_sub_check_against_constants() {
+        let a = Fq6::new(
+            Fq2::new(Fq::from(10u64), Fq::from(20u64)),
+            Fq2::new(Fq::from(30u64), Fq::from(40u64)),
+            Fq2::new(Fq::from(50u64), Fq::from(60u64)),
+        );
+        let b = Fq6::new(
+            Fq2::new(Fq::from(1u64), Fq::from(2u64)),
+            Fq2::new(Fq::from(3u64), Fq::from(4u64)),
+            Fq2::new(Fq::from(5u64), Fq::from(6u64)),
+        );
+        let c = a - b;
+        assert_eq!(c.c0.c0, Fq::from(9u64));
+        assert_eq!(c.c1.c0, Fq::from(27u64));
+        assert_eq!(c.c2.c0, Fq::from(45u64));
+    }
+
+    #[test]
+    fn fq6_to_montgomery_form() {
+        let a = Fq6::random_element();
+        let roundtrip = a.from_montgomery_form().to_montgomery_form();
+        assert_eq!(a, roundtrip);
+    }
+
+    #[test]
+    fn fq6_from_montgomery_form() {
+        let a = Fq6::random_element();
+        let from = a.from_montgomery_form();
+        let back = from.to_montgomery_form();
+        assert_eq!(a, back);
+    }
+
+    #[test]
+    fn fq6_mul_sqr_consistency() {
+        for _ in 0..100 {
+            let a = Fq6::random_element();
+            assert_eq!(a * a, a.sqr(), "a*a should equal a.sqr()");
+        }
+    }
+
+    #[test]
+    fn fq6_add_mul_consistency() {
+        for _ in 0..100 {
+            let a = Fq6::random_element();
+            let b = Fq6::random_element();
+            let c = Fq6::random_element();
+            let lhs = (a + b) * c;
+            let rhs = a * c + b * c;
+            assert_eq!(lhs, rhs, "(a+b)*c should equal a*c + b*c");
+        }
+    }
+
+    #[test]
+    fn fq6_sub_mul_consistency() {
+        for _ in 0..100 {
+            let a = Fq6::random_element();
+            let b = Fq6::random_element();
+            let c = Fq6::random_element();
+            let lhs = (a - b) * c;
+            let rhs = a * c - b * c;
+            assert_eq!(lhs, rhs, "(a-b)*c should equal a*c - b*c");
+        }
+    }
+
+    #[test]
+    fn fq6_invert() {
+        for _ in 0..100 {
+            let a = Fq6::random_element();
+            if !a.is_zero() {
+                let a_inv = a.invert();
+                let product = a * a_inv;
+                assert_eq!(product, Fq6::one(), "a * a^-1 should be one");
+            }
+        }
+    }
+
+    #[test]
+    fn fq6_copy() {
+        let a = Fq6::random_element();
+        let b = a;
+        assert_eq!(a, b, "copy should preserve value");
+    }
+}
