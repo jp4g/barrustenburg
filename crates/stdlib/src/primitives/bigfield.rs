@@ -470,8 +470,13 @@ impl<P: FieldParams, T: FieldParams> BigFieldT<P, T> {
         // Set maximum values
         let num_last = if can_overflow {
             NUM_LIMB_BITS
-        } else if maximum_bitlength > 0 {
+        } else if maximum_bitlength > (NUM_LIMB_BITS * 3) as usize {
             (maximum_bitlength as u64) - NUM_LIMB_BITS * 3
+        } else if maximum_bitlength > 0 {
+            // Small quotient fits in fewer than 4 limbs. Use full limb width
+            // for the last limb to match C++ unsigned wrapping behavior where
+            // the range constraint is effectively unconstrained.
+            NUM_LIMB_BITS
         } else {
             num_last_limb_bits::<T>()
         };
