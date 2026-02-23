@@ -912,6 +912,73 @@ impl<P: FieldParams> FieldT<P> {
     }
 
     // ════════════════════════════════════════════════════════════════════
+    //  Conditional assignment & equality
+    // ════════════════════════════════════════════════════════════════════
+
+    /// If `predicate` is true, return `lhs`; otherwise return `rhs`.
+    ///
+    /// result = rhs + predicate * (lhs - rhs)
+    pub fn conditional_assign(
+        predicate: &super::bool::BoolT<P>,
+        lhs: &FieldT<P>,
+        rhs: &FieldT<P>,
+    ) -> FieldT<P> {
+        let predicate_field = bool_to_field(predicate);
+        let diff = lhs.clone() - rhs.clone();
+        diff.madd(&predicate_field, rhs)
+    }
+
+    /// Returns a `BoolT` that is true iff `self == other` (in-circuit).
+    pub fn is_equal(&self, other: &FieldT<P>) -> super::bool::BoolT<P> {
+        use super::bool::BoolT;
+
+        let diff = self.clone() - other.clone();
+        if diff.is_constant() {
+            return BoolT::from_constant(diff.get_value().is_zero());
+        }
+
+        let ctx = diff.context.as_ref().unwrap().clone();
+        let value = diff.get_value();
+        let is_zero_val = value.is_zero();
+        let inverse_val = if value.is_zero() {
+            Field::zero()
+        } else {
+            value.invert()
+        };
+
+        let is_zero_witness = WitnessT::new(ctx.clone(), Field::from(is_zero_val as u64));
+        let inverse_witness = WitnessT::new(ctx.clone(), inverse_val);
+
+        let is_zero_field = FieldT::from_witness_t(&is_zero_witness);
+        let inverse_field = FieldT::from_witness_t(&inverse_witness);
+
+        // Constraint 1: diff * inverse = 1 - is_zero
+        // i.e. diff * inverse + is_zero - 1 = 0
+        let one = FieldT::<P>::from_u64(1);
+        FieldT::evaluate_polynomial_identity(
+            &diff,
+            &inverse_field,
+            &is_zero_field,
+            &(-one),
+            "field_t::is_equal: diff * inverse + is_zero - 1 = 0",
+        );
+
+        // Constraint 2: diff * is_zero = 0
+        FieldT::evaluate_polynomial_identity(
+            &diff,
+            &is_zero_field,
+            &FieldT::default(),
+            &FieldT::default(),
+            "field_t::is_equal: diff * is_zero = 0",
+        );
+
+        // Constrain is_zero to be boolean
+        ctx.borrow_mut().create_bool_gate(is_zero_field.normalize().witness_index);
+
+        BoolT::from_witness_index_unsafe(ctx, is_zero_field.normalize().witness_index)
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     //  Range constraints
     // ════════════════════════════════════════════════════════════════════
 
@@ -1258,6 +1325,120 @@ impl<P: FieldParams> DivAssign for FieldT<P> {
         rhs.assert_is_not_zero("field_t::operator/= divisor is 0");
         *self = self.divide_no_zero_check(&rhs);
     }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  Utility functions
+// ════════════════════════════════════════════════════════════════════════
+
+/// Convert a `BoolT` into a `FieldT` (0 or 1).
+pub fn bool_to_field<P: FieldParams>(b: &super::bool::BoolT<P>) -> FieldT<P> {
+    if b.is_constant() {
+        FieldT::from_field(Field::from(b.get_value() as u64))
+    } else {
+        let normalized = b.normalize();
+        FieldT::from_witness_index(
+            normalized.context.as_ref().unwrap().clone(),
+            normalized.witness_index,
+        )
+    }
+}
+
+/// Validate that `lo + hi * 2^lo_bits < field_modulus`.
+///
+/// Uses a borrow-subtraction technique. Range constraints on lo and hi are
+/// assumed to be enforced externally (e.g., by the batch_mul algorithm).
+pub fn validate_split_in_field_unsafe<P: FieldParams>(
+    lo: &FieldT<P>,
+    hi: &FieldT<P>,
+    lo_bits: usize,
+    field_modulus: &[u64; 4],
+) {
+    let total_bits = get_msb_u256(field_modulus) as usize + 1;
+    let hi_bits = total_bits - lo_bits;
+
+    // Split the field modulus: r_lo = modulus mod 2^lo_bits, r_hi = modulus >> lo_bits
+    let r_lo_limbs = u256_mask_lo(field_modulus, lo_bits);
+    let r_hi_limbs = u256_shr(field_modulus, lo_bits);
+
+    // Check if we need to borrow: borrow = 1 if lo_value > r_lo
+    let lo_val = lo.get_value().from_montgomery_form();
+    let need_borrow = u256_gt(&lo_val.data, &r_lo_limbs);
+
+    let borrow = if lo.is_constant() {
+        FieldT::from_field(Field::from(need_borrow as u64))
+    } else {
+        let ctx = lo.context.as_ref().unwrap().clone();
+        let borrow_field =
+            FieldT::from_witness(ctx.clone(), Field::from(need_borrow as u64));
+        ctx.borrow_mut().create_new_range_constraint(
+            borrow_field.normalize().witness_index,
+            1,
+            "borrow",
+        );
+        borrow_field
+    };
+
+    let r_hi_field = FieldT::<P>::from_field(Field::from_limbs(r_hi_limbs));
+    let r_lo_field = FieldT::<P>::from_field(Field::from_limbs(r_lo_limbs));
+    let shift = {
+        let mut s = [0u64; 4];
+        let limb_idx = lo_bits / 64;
+        let bit_idx = lo_bits % 64;
+        if limb_idx < 4 {
+            s[limb_idx] = 1u64 << bit_idx;
+        }
+        FieldT::<P>::from_field(Field::from_limbs(s))
+    };
+
+    // Hi range check = r_hi - hi - borrow
+    // Lo range check = r_lo - lo + borrow * 2^lo_bits
+    let hi_diff = (r_hi_field - hi.clone()) - borrow.clone();
+    let lo_diff = (r_lo_field - lo.clone()) + borrow.mul_impl(&shift);
+
+    hi_diff.create_range_constraint(hi_bits, "validate_split_in_field_unsafe hi");
+    lo_diff.create_range_constraint(lo_bits, "validate_split_in_field_unsafe lo");
+}
+
+/// Mask a [u64; 4] to keep only the lower `bits` bits.
+fn u256_mask_lo(v: &[u64; 4], bits: usize) -> [u64; 4] {
+    let mut result = [0u64; 4];
+    let full_limbs = bits / 64;
+    let remaining = bits % 64;
+    for i in 0..full_limbs.min(4) {
+        result[i] = v[i];
+    }
+    if full_limbs < 4 && remaining > 0 {
+        result[full_limbs] = v[full_limbs] & ((1u64 << remaining) - 1);
+    }
+    result
+}
+
+/// Shift a [u64; 4] right by `bits` bits.
+fn u256_shr(v: &[u64; 4], bits: usize) -> [u64; 4] {
+    let mut result = [0u64; 4];
+    let limb_shift = bits / 64;
+    let bit_shift = bits % 64;
+    for i in 0..(4 - limb_shift) {
+        result[i] = v[i + limb_shift] >> bit_shift;
+        if bit_shift > 0 && i + limb_shift + 1 < 4 {
+            result[i] |= v[i + limb_shift + 1] << (64 - bit_shift);
+        }
+    }
+    result
+}
+
+/// Compare two [u64; 4] values: returns true if a > b.
+fn u256_gt(a: &[u64; 4], b: &[u64; 4]) -> bool {
+    for i in (0..4).rev() {
+        if a[i] > b[i] {
+            return true;
+        }
+        if a[i] < b[i] {
+            return false;
+        }
+    }
+    false
 }
 
 // ════════════════════════════════════════════════════════════════════════
