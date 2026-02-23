@@ -1,0 +1,11 @@
+[package]
+name = "bbrs-stdlib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bbrs-ecc = { path = "../ecc" }
+bbrs-numeric = { path = "../numeric" }
+bbrs-circuit-builder = { path = "../circuit_builder" }
+
+[dev-dependencies]
