@@ -14,5 +14,5 @@ pub mod uint256;
 pub mod uintx;
 
 // Re-export primary types at the numeric level, matching BB's `numeric::uint256_t` etc.
-pub use uint256::U256;
+pub use uint256::{U256, U256Ext};
 pub use uintx::{U512, U1024};

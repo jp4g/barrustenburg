@@ -8,5 +8,14 @@ bbrs-ecc = { path = "../ecc" }
 bbrs-numeric = { path = "../numeric" }
 bbrs-circuit-builder = { path = "../circuit_builder" }
 bbrs-crypto = { path = "../crypto" }
+bbrs-transcript = { path = "../transcript" }
+bbrs-relations = { path = "../relations" }
+bbrs-honk = { path = "../honk" }
+bbrs-commitment-schemes = { path = "../commitment_schemes" }
+bbrs-ultra-honk = { path = "../ultra_honk" }
+bbrs-sumcheck = { path = "../sumcheck" }
+bbrs-flavor = { path = "../flavor" }
 
 [dev-dependencies]
+bbrs-srs = { path = "../srs" }
+bbrs-polynomials = { path = "../polynomials" }

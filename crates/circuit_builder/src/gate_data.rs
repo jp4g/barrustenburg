@@ -320,18 +320,52 @@ pub struct MultiTableId(pub u64);
 /// Multi-table: aggregates multiple basic tables with step sizes for accumulation.
 ///
 /// Port of C++ `plookup::MultiTable` (simplified).
+///
+/// Step sizes are full field elements because some tables (e.g. SHA256) have
+/// step sizes that are field-element inverses, not small integers.
 #[derive(Debug, Clone)]
-pub struct MultiTable {
+pub struct MultiTable<P: FieldParams> {
     pub id: MultiTableId,
     pub basic_table_ids: Vec<BasicTableId>,
-    pub column_1_step_sizes: Vec<u64>,
-    pub column_2_step_sizes: Vec<u64>,
-    pub column_3_step_sizes: Vec<u64>,
+    pub column_1_step_sizes: Vec<Field<P>>,
+    pub column_2_step_sizes: Vec<Field<P>>,
+    pub column_3_step_sizes: Vec<Field<P>>,
 }
 
 // ════════════════════════════════════════════════════════════════════════
 //  Non-native field types
 // ════════════════════════════════════════════════════════════════════════
+
+/// Witness indices for a full non-native field multiplication: a * b = q * p + r.
+///
+/// Port of C++ `non_native_multiplication_witnesses`.
+#[derive(Debug, Clone)]
+pub struct NnfMulWitnesses<P: FieldParams> {
+    pub a: [u32; 4],
+    pub b: [u32; 4],
+    pub q: [u32; 4],
+    pub r: [u32; 4],
+    pub neg_modulus: [Field<P>; 4],
+}
+
+/// Witness indices for a partial non-native field multiplication (a * b limbs only).
+///
+/// Port of C++ `non_native_partial_multiplication_witnesses`.
+#[derive(Debug, Clone)]
+pub struct NnfPartialMulWitnesses {
+    pub a: [u32; 4],
+    pub b: [u32; 4],
+}
+
+/// A (witness_index, multiplicative_constant) pair.
+///
+/// Port of C++ `scaled_witness = std::pair<uint32_t, FF>`.
+pub type ScaledWitness<P> = (u32, Field<P>);
+
+/// An addition-gate simple tuple: (x_term, y_term, additive_constant).
+///
+/// Port of C++ `add_simple = std::tuple<scaled_witness, scaled_witness, FF>`.
+pub type NnfAddSimple<P> = (ScaledWitness<P>, ScaledWitness<P>, Field<P>);
 
 /// Cached partial non-native field multiplication.
 ///
