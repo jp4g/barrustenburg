@@ -16,9 +16,10 @@ use crate::builder_base::{CircuitBuilderBase, DEFAULT_TAG};
 use crate::execution_trace::UltraExecutionTraceBlocks;
 use crate::gate_data::{
     AddQuad, AddTriple, ArithmeticTriple, BasicTable, BasicTableId, CachedPartialNnfMul,
-    ColumnIdx, EccAddGate, EccDblGate, MemorySelector, MultiTable, MulQuad, NnfSelector,
-    Poseidon2ExternalGate, Poseidon2InternalGate, RamAccessType, RamRecord, RamTranscript,
-    ReadData, RomRecord, RomTranscript, UNINITIALIZED_MEMORY_RECORD,
+    ColumnIdx, EccAddGate, EccDblGate, MemorySelector, MultiTable, MulQuad, NnfAddSimple,
+    NnfMulWitnesses, NnfPartialMulWitnesses, NnfSelector, Poseidon2ExternalGate,
+    Poseidon2InternalGate, RamAccessType, RamRecord, RamTranscript, ReadData, RomRecord,
+    RomTranscript, UNINITIALIZED_MEMORY_RECORD,
 };
 
 /// The plookup range proof requires work linear in range size, thus cannot be used
@@ -2524,6 +2525,822 @@ impl<P: FieldParams> UltraCircuitBuilder<P> {
         }
 
         self.cached_partial_non_native_field_multiplications = unique;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Non-native field: circuit builder evaluation methods
+    // ════════════════════════════════════════════════════════════════════
+
+    /// Decompose two limbs into 5 × 14-bit sublimbs each and create NNF range-check gates.
+    ///
+    /// Port of C++ `UltraCircuitBuilder_::range_constrain_two_limbs`.
+    pub fn range_constrain_two_limbs(
+        &mut self,
+        lo_idx: u32,
+        hi_idx: u32,
+        lo_limb_bits: usize,
+        hi_limb_bits: usize,
+        msg: &str,
+    ) {
+        use bbrs_numeric::U256Ext;
+
+        assert!(lo_limb_bits <= 14 * 5, "lo_limb_bits must be <= 70");
+        assert!(hi_limb_bits <= 14 * 5, "hi_limb_bits must be <= 70");
+
+        // Check witness values are in range (convert from Montgomery to standard form)
+        let lo_val_field = self.base.get_variable(lo_idx).from_montgomery_form();
+        let lo_val = bbrs_numeric::U256::from_words(lo_val_field.data);
+        if lo_val >= bbrs_numeric::U256::from(1u64).wrapping_shl_vartime(lo_limb_bits as u32)
+            && !self.base.failed()
+        {
+            self.base.failure(format!("{}: lo limb.", msg));
+        }
+        let hi_val_field = self.base.get_variable(hi_idx).from_montgomery_form();
+        let hi_val = bbrs_numeric::U256::from_words(hi_val_field.data);
+        if hi_val >= bbrs_numeric::U256::from(1u64).wrapping_shl_vartime(hi_limb_bits as u32)
+            && !self.base.failed()
+        {
+            self.base.failure(format!("{}: hi limb.", msg));
+        }
+
+        let get_limb_masks = |limb_bits: usize| -> [u64; 5] {
+            let mut sublimb_bits = [0usize; 5];
+            sublimb_bits[0] = if limb_bits >= 14 { 14 } else { limb_bits };
+            sublimb_bits[1] = if limb_bits >= 28 {
+                14
+            } else if limb_bits > 14 {
+                limb_bits - 14
+            } else {
+                0
+            };
+            sublimb_bits[2] = if limb_bits >= 42 {
+                14
+            } else if limb_bits > 28 {
+                limb_bits - 28
+            } else {
+                0
+            };
+            sublimb_bits[3] = if limb_bits >= 56 {
+                14
+            } else if limb_bits > 42 {
+                limb_bits - 42
+            } else {
+                0
+            };
+            sublimb_bits[4] = if limb_bits > 56 {
+                limb_bits - 56
+            } else {
+                0
+            };
+            let mut masks = [0u64; 5];
+            for i in 0..5 {
+                masks[i] = (1u64 << sublimb_bits[i]) - 1;
+            }
+            masks
+        };
+
+        let get_sublimbs =
+            |base: &mut CircuitBuilderBase<P>,
+             limb_idx: u32,
+             sublimb_masks: &[u64; 5]|
+             -> [u32; 5] {
+                let limb_field = base.get_variable(limb_idx).from_montgomery_form();
+                let limb = bbrs_numeric::U256::from_words(limb_field.data);
+                let max_sublimb_mask: u64 = (1u64 << 14) - 1;
+                let mut sublimb_indices = [0u32; 5];
+                for i in 0..5 {
+                    if sublimb_masks[i] != 0 {
+                        let shift = (i * 14) as u32;
+                        let val = limb.slice(shift, shift + 14) & max_sublimb_mask;
+                        sublimb_indices[i] = base.add_variable(Field::from(val));
+                    } else {
+                        sublimb_indices[i] = base.zero_idx();
+                    }
+                }
+                sublimb_indices
+            };
+
+        let lo_masks = get_limb_masks(lo_limb_bits);
+        let hi_masks = get_limb_masks(hi_limb_bits);
+        let lo_sublimbs = get_sublimbs(&mut self.base, lo_idx, &lo_masks);
+        let hi_sublimbs = get_sublimbs(&mut self.base, hi_idx, &hi_masks);
+
+        // Gate 1: LIMB_ACCUMULATE_1 - lo limb decomposition
+        self.blocks.nnf.block.populate_wires(
+            lo_sublimbs[0],
+            lo_sublimbs[1],
+            lo_sublimbs[2],
+            lo_idx,
+        );
+        self.apply_nnf_selectors(NnfSelector::LimbAccumulate1);
+        self.blocks.nnf.block.q_c_mut().push(Field::zero());
+        self.blocks.nnf.set_gate_selector(Field::from(1u64));
+        self.check_selector_length_consistency();
+
+        // Gate 2: LIMB_ACCUMULATE_2 - cross-limb transition
+        self.blocks.nnf.block.populate_wires(
+            lo_sublimbs[3],
+            lo_sublimbs[4],
+            hi_sublimbs[0],
+            hi_sublimbs[1],
+        );
+        self.apply_nnf_selectors(NnfSelector::LimbAccumulate2);
+        self.blocks.nnf.block.q_c_mut().push(Field::zero());
+        self.blocks.nnf.set_gate_selector(Field::from(1u64));
+        self.check_selector_length_consistency();
+
+        // Gate 3: NNF_NONE - hi limb decomposition
+        self.blocks.nnf.block.populate_wires(
+            hi_sublimbs[2],
+            hi_sublimbs[3],
+            hi_sublimbs[4],
+            hi_idx,
+        );
+        self.apply_nnf_selectors(NnfSelector::NnfNone);
+        self.blocks.nnf.block.q_c_mut().push(Field::zero());
+        self.blocks.nnf.set_gate_selector(Field::from(1u64));
+        self.check_selector_length_consistency();
+
+        self.base.increment_num_gates(3);
+
+        // Range-check each non-zero sublimb
+        for i in 0..5 {
+            if lo_masks[i] != 0 {
+                self.create_new_range_constraint(
+                    lo_sublimbs[i],
+                    lo_masks[i],
+                    "ultra_circuit_builder: sublimb of low too large",
+                );
+            }
+            if hi_masks[i] != 0 {
+                self.create_new_range_constraint(
+                    hi_sublimbs[i],
+                    hi_masks[i],
+                    "ultra_circuit_builder: sublimb of hi too large",
+                );
+            }
+        }
+    }
+
+    /// Create gates for a full non-native field multiplication identity a * b = q * p + r.
+    ///
+    /// Creates 8 gates total: 4 NNF gates for limb multiplications + 2 big_add gates +
+    /// 1 unconstrained gate + 1 big_add gate for quotient/remainder validation.
+    ///
+    /// Returns `[lo_1_idx, hi_3_idx]` — the witness indices of the two remainder carry limbs.
+    ///
+    /// Port of C++ `UltraCircuitBuilder_::evaluate_non_native_field_multiplication`.
+    pub fn evaluate_non_native_field_multiplication(
+        &mut self,
+        input: &NnfMulWitnesses<P>,
+    ) -> [u32; 2] {
+        let a0 = self.base.get_variable(input.a[0]);
+        let a1 = self.base.get_variable(input.a[1]);
+        let a2 = self.base.get_variable(input.a[2]);
+        let a3 = self.base.get_variable(input.a[3]);
+        let b0 = self.base.get_variable(input.b[0]);
+        let b1 = self.base.get_variable(input.b[1]);
+        let b2 = self.base.get_variable(input.b[2]);
+        let b3 = self.base.get_variable(input.b[3]);
+        let q0 = self.base.get_variable(input.q[0]);
+        let q1 = self.base.get_variable(input.q[1]);
+        let q2 = self.base.get_variable(input.q[2]);
+        let q3 = self.base.get_variable(input.q[3]);
+        let r0 = self.base.get_variable(input.r[0]);
+        let r1 = self.base.get_variable(input.r[1]);
+        let r2 = self.base.get_variable(input.r[2]);
+        let r3 = self.base.get_variable(input.r[3]);
+        let p_neg = &input.neg_modulus;
+
+        let limb_shift: Field<P> =
+            Field::from_limbs(*bbrs_numeric::U256::from(1u64).wrapping_shl_vartime(
+                DEFAULT_NON_NATIVE_FIELD_LIMB_BITS as u32,
+            ).as_words());
+        let limb_rshift = limb_shift.invert();
+        let limb_rshift_2 = limb_rshift * limb_rshift;
+
+        // Compute intermediate values
+        let lo_0 = (a0 * b0 - r0) + (a1 * b0 + a0 * b1) * limb_shift;
+        let lo_1 =
+            (lo_0 + q0 * p_neg[0] + (q1 * p_neg[0] + q0 * p_neg[1] - r1) * limb_shift)
+                * limb_rshift_2;
+
+        let hi_0 = (a2 * b0 + a0 * b2) + (a0 * b3 + a3 * b0 - r3) * limb_shift;
+        let hi_1 = hi_0 + (a1 * b1 - r2) + (a1 * b2 + a2 * b1) * limb_shift;
+        let hi_2 =
+            hi_1 + lo_1 + q2 * p_neg[0] + (q3 * p_neg[0] + q2 * p_neg[1]) * limb_shift;
+        let hi_3 = (hi_2 + q0 * p_neg[2] + q1 * p_neg[1]
+            + (q0 * p_neg[3] + q1 * p_neg[2]) * limb_shift)
+            * limb_rshift_2;
+
+        let lo_0_idx = self.base.add_variable(lo_0);
+        let lo_1_idx = self.base.add_variable(lo_1);
+        let hi_0_idx = self.base.add_variable(hi_0);
+        let hi_1_idx = self.base.add_variable(hi_1);
+        let hi_2_idx = self.base.add_variable(hi_2);
+        let hi_3_idx = self.base.add_variable(hi_3);
+
+        // Gate 1: big_add_gate to validate lo_1
+        let limb_shift_sq = limb_shift * limb_shift;
+        self.create_big_add_gate(
+            &AddQuad {
+                a: input.q[0],
+                b: input.q[1],
+                c: input.r[1],
+                d: lo_1_idx,
+                a_scaling: p_neg[0] + p_neg[1] * limb_shift,
+                b_scaling: p_neg[0] * limb_shift,
+                c_scaling: -limb_shift,
+                d_scaling: -limb_shift_sq,
+                const_scaling: Field::zero(),
+            },
+            true,
+        );
+
+        // Gate 2: unconstrained gate providing lo_0 via w_4_shift for gate 1
+        let zero = self.base.zero_idx();
+        self.create_unconstrained_gate(
+            UltraBlockIndex::Arithmetic,
+            zero,
+            zero,
+            zero,
+            lo_0_idx,
+        );
+
+        // Gate 3: NNF gate to check lo_0
+        self.blocks.nnf.block.populate_wires(
+            input.a[1],
+            input.b[1],
+            input.r[0],
+            lo_0_idx,
+        );
+        self.apply_nnf_selectors(NnfSelector::NonNativeField1);
+        self.blocks.nnf.block.q_c_mut().push(Field::zero());
+        self.blocks.nnf.set_gate_selector(Field::from(1u64));
+        self.check_selector_length_consistency();
+        self.base.increment_num_gates(1);
+
+        // Gate 4: NNF gate to check hi_0
+        self.blocks.nnf.block.populate_wires(
+            input.a[0],
+            input.b[0],
+            input.a[3],
+            input.b[3],
+        );
+        self.apply_nnf_selectors(NnfSelector::NonNativeField2);
+        self.blocks.nnf.block.q_c_mut().push(Field::zero());
+        self.blocks.nnf.set_gate_selector(Field::from(1u64));
+        self.check_selector_length_consistency();
+        self.base.increment_num_gates(1);
+
+        // Gate 5: NNF gate to check hi_1
+        self.blocks.nnf.block.populate_wires(
+            input.a[2],
+            input.b[2],
+            input.r[3],
+            hi_0_idx,
+        );
+        self.apply_nnf_selectors(NnfSelector::NonNativeField3);
+        self.blocks.nnf.block.q_c_mut().push(Field::zero());
+        self.blocks.nnf.set_gate_selector(Field::from(1u64));
+        self.check_selector_length_consistency();
+        self.base.increment_num_gates(1);
+
+        // Gate 6: NNF unconstrained gate (provides shift values for gate 5)
+        self.blocks.nnf.block.populate_wires(
+            input.a[1],
+            input.b[1],
+            input.r[2],
+            hi_1_idx,
+        );
+        self.apply_nnf_selectors(NnfSelector::NnfNone);
+        self.blocks.nnf.block.q_c_mut().push(Field::zero());
+        self.blocks.nnf.set_gate_selector(Field::zero());
+        self.check_selector_length_consistency();
+        self.base.increment_num_gates(1);
+
+        // Gate 7: big_add_gate to validate hi_2
+        self.create_big_add_gate(
+            &AddQuad {
+                a: input.q[2],
+                b: input.q[3],
+                c: lo_1_idx,
+                d: hi_1_idx,
+                a_scaling: -(p_neg[1] * limb_shift + p_neg[0]),
+                b_scaling: -(p_neg[0] * limb_shift),
+                c_scaling: -Field::one(),
+                d_scaling: -Field::one(),
+                const_scaling: Field::zero(),
+            },
+            true,
+        );
+
+        // Gate 8: big_add_gate to validate hi_3 (provides hi_2 in w_4)
+        self.create_big_add_gate(
+            &AddQuad {
+                a: hi_3_idx,
+                b: input.q[0],
+                c: input.q[1],
+                d: hi_2_idx,
+                a_scaling: -Field::one(),
+                b_scaling: p_neg[3] * limb_rshift + p_neg[2] * limb_rshift_2,
+                c_scaling: p_neg[2] * limb_rshift + p_neg[1] * limb_rshift_2,
+                d_scaling: limb_rshift_2,
+                const_scaling: Field::zero(),
+            },
+            false,
+        );
+
+        [lo_1_idx, hi_3_idx]
+    }
+
+    /// Queue a partial non-native field multiplication for deferred gate creation.
+    ///
+    /// Computes lo_0 and hi_1 intermediates of `a * b` and caches the result.
+    /// Gates are created during finalization via `process_non_native_field_multiplications`.
+    ///
+    /// Returns `[lo_0_idx, hi_1_idx]`.
+    ///
+    /// Port of C++ `UltraCircuitBuilder_::queue_partial_non_native_field_multiplication`.
+    pub fn queue_partial_non_native_field_multiplication(
+        &mut self,
+        input: &NnfPartialMulWitnesses,
+    ) -> [u32; 2] {
+        let a: [Field<P>; 4] = [
+            self.base.get_variable(input.a[0]),
+            self.base.get_variable(input.a[1]),
+            self.base.get_variable(input.a[2]),
+            self.base.get_variable(input.a[3]),
+        ];
+        let b: [Field<P>; 4] = [
+            self.base.get_variable(input.b[0]),
+            self.base.get_variable(input.b[1]),
+            self.base.get_variable(input.b[2]),
+            self.base.get_variable(input.b[3]),
+        ];
+
+        let limb_shift: Field<P> =
+            Field::from_limbs(*bbrs_numeric::U256::from(1u64).wrapping_shl_vartime(
+                DEFAULT_NON_NATIVE_FIELD_LIMB_BITS as u32,
+            ).as_words());
+
+        let lo_0 = a[0] * b[0] + (a[1] * b[0] + a[0] * b[1]) * limb_shift;
+        let hi_0 = a[2] * b[0] + a[0] * b[2]
+            + (a[0] * b[3] + a[3] * b[0]) * limb_shift;
+        let hi_1 = hi_0 + a[1] * b[1] + (a[1] * b[2] + a[2] * b[1]) * limb_shift;
+
+        let lo_0_idx = self.base.add_variable(lo_0);
+        let hi_0_idx = self.base.add_variable(hi_0);
+        let hi_1_idx = self.base.add_variable(hi_1);
+
+        self.cached_partial_non_native_field_multiplications
+            .push(CachedPartialNnfMul {
+                a: input.a,
+                b: input.b,
+                lo_0: lo_0_idx,
+                hi_0: hi_0_idx,
+                hi_1: hi_1_idx,
+            });
+
+        [lo_0_idx, hi_1_idx]
+    }
+
+    /// Create gates for non-native field addition (z = x + y per-limb with scaling).
+    ///
+    /// Uses special ArithmeticRelation modes (q_arith = 3, 2, 1, 1) to add two
+    /// non-native field elements in 4 gates.
+    ///
+    /// Returns `[z_0, z_1, z_2, z_3, z_p]` — the result limb and prime-basis witness indices.
+    ///
+    /// Port of C++ `UltraCircuitBuilder_::evaluate_non_native_field_addition`.
+    pub fn evaluate_non_native_field_addition(
+        &mut self,
+        limb0: NnfAddSimple<P>,
+        limb1: NnfAddSimple<P>,
+        limb2: NnfAddSimple<P>,
+        limb3: NnfAddSimple<P>,
+        limbp: (u32, u32, Field<P>),
+    ) -> [u32; 5] {
+        let (x_0, x_mulconst0) = limb0.0;
+        let (x_1, x_mulconst1) = limb1.0;
+        let (x_2, x_mulconst2) = limb2.0;
+        let (x_3, x_mulconst3) = limb3.0;
+        let x_p = limbp.0;
+
+        let (y_0, y_mulconst0) = limb0.1;
+        let (y_1, y_mulconst1) = limb1.1;
+        let (y_2, y_mulconst2) = limb2.1;
+        let (y_3, y_mulconst3) = limb3.1;
+        let y_p = limbp.1;
+
+        let addconst0 = limb0.2;
+        let addconst1 = limb1.2;
+        let addconst2 = limb2.2;
+        let addconst3 = limb3.2;
+        let addconstp = limbp.2;
+
+        // Compute result limb values
+        let z_0value = self.base.get_variable(x_0) * x_mulconst0
+            + self.base.get_variable(y_0) * y_mulconst0
+            + addconst0;
+        let z_1value = self.base.get_variable(x_1) * x_mulconst1
+            + self.base.get_variable(y_1) * y_mulconst1
+            + addconst1;
+        let z_2value = self.base.get_variable(x_2) * x_mulconst2
+            + self.base.get_variable(y_2) * y_mulconst2
+            + addconst2;
+        let z_3value = self.base.get_variable(x_3) * x_mulconst3
+            + self.base.get_variable(y_3) * y_mulconst3
+            + addconst3;
+        let z_pvalue =
+            self.base.get_variable(x_p) + self.base.get_variable(y_p) + addconstp;
+
+        let z_0 = self.base.add_variable(z_0value);
+        let z_1 = self.base.add_variable(z_1value);
+        let z_2 = self.base.add_variable(z_2value);
+        let z_3 = self.base.add_variable(z_3value);
+        let z_p = self.base.add_variable(z_pvalue);
+
+        let zero = self.base.zero_idx();
+        let linear_term_scale_factor = Field::<P>::from(2u64);
+
+        // Row 0: q_arith = 3
+        self.blocks
+            .arithmetic
+            .block
+            .populate_wires(y_p, x_0, y_0, x_p);
+        self.blocks.arithmetic.block.q_m_mut().push(addconstp);
+        self.blocks
+            .arithmetic
+            .block
+            .q_1_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_2_mut()
+            .push(-(x_mulconst0 * linear_term_scale_factor));
+        self.blocks
+            .arithmetic
+            .block
+            .q_3_mut()
+            .push(-(y_mulconst0 * linear_term_scale_factor));
+        self.blocks
+            .arithmetic
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_c_mut()
+            .push(-(addconst0 * linear_term_scale_factor));
+        self.blocks
+            .arithmetic
+            .set_gate_selector(Field::from(3u64));
+
+        // Row 1: q_arith = 2
+        self.blocks
+            .arithmetic
+            .block
+            .populate_wires(z_p, x_1, y_1, z_0);
+        self.blocks
+            .arithmetic
+            .block
+            .q_m_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_1_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_2_mut()
+            .push(-x_mulconst1);
+        self.blocks
+            .arithmetic
+            .block
+            .q_3_mut()
+            .push(-y_mulconst1);
+        self.blocks
+            .arithmetic
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_c_mut()
+            .push(-addconst1);
+        self.blocks
+            .arithmetic
+            .set_gate_selector(Field::from(2u64));
+
+        // Row 2: q_arith = 1
+        self.blocks
+            .arithmetic
+            .block
+            .populate_wires(x_2, y_2, z_2, z_1);
+        self.blocks
+            .arithmetic
+            .block
+            .q_m_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_1_mut()
+            .push(-x_mulconst2);
+        self.blocks
+            .arithmetic
+            .block
+            .q_2_mut()
+            .push(-y_mulconst2);
+        self.blocks
+            .arithmetic
+            .block
+            .q_3_mut()
+            .push(Field::one());
+        self.blocks
+            .arithmetic
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_c_mut()
+            .push(-addconst2);
+        self.blocks
+            .arithmetic
+            .set_gate_selector(Field::one());
+
+        // Row 3: q_arith = 1
+        self.blocks
+            .arithmetic
+            .block
+            .populate_wires(x_3, y_3, z_3, zero);
+        self.blocks
+            .arithmetic
+            .block
+            .q_m_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_1_mut()
+            .push(-x_mulconst3);
+        self.blocks
+            .arithmetic
+            .block
+            .q_2_mut()
+            .push(-y_mulconst3);
+        self.blocks
+            .arithmetic
+            .block
+            .q_3_mut()
+            .push(Field::one());
+        self.blocks
+            .arithmetic
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_c_mut()
+            .push(-addconst3);
+        self.blocks
+            .arithmetic
+            .set_gate_selector(Field::one());
+
+        self.check_selector_length_consistency();
+        self.base.increment_num_gates(4);
+
+        [z_0, z_1, z_2, z_3, z_p]
+    }
+
+    /// Create gates for non-native field subtraction (z = x - y per-limb with scaling).
+    ///
+    /// Uses special ArithmeticRelation modes (q_arith = 3, 2, 1, 1) to subtract two
+    /// non-native field elements in 4 gates.
+    ///
+    /// Returns `[z_0, z_1, z_2, z_3, z_p]`.
+    ///
+    /// Port of C++ `UltraCircuitBuilder_::evaluate_non_native_field_subtraction`.
+    pub fn evaluate_non_native_field_subtraction(
+        &mut self,
+        limb0: NnfAddSimple<P>,
+        limb1: NnfAddSimple<P>,
+        limb2: NnfAddSimple<P>,
+        limb3: NnfAddSimple<P>,
+        limbp: (u32, u32, Field<P>),
+    ) -> [u32; 5] {
+        let (x_0, x_mulconst0) = limb0.0;
+        let (x_1, x_mulconst1) = limb1.0;
+        let (x_2, x_mulconst2) = limb2.0;
+        let (x_3, x_mulconst3) = limb3.0;
+        let x_p = limbp.0;
+
+        let (y_0, y_mulconst0) = limb0.1;
+        let (y_1, y_mulconst1) = limb1.1;
+        let (y_2, y_mulconst2) = limb2.1;
+        let (y_3, y_mulconst3) = limb3.1;
+        let y_p = limbp.1;
+
+        let addconst0 = limb0.2;
+        let addconst1 = limb1.2;
+        let addconst2 = limb2.2;
+        let addconst3 = limb3.2;
+        let addconstp = limbp.2;
+
+        // Compute result limb values (subtraction: x - y)
+        let z_0value = self.base.get_variable(x_0) * x_mulconst0
+            - self.base.get_variable(y_0) * y_mulconst0
+            + addconst0;
+        let z_1value = self.base.get_variable(x_1) * x_mulconst1
+            - self.base.get_variable(y_1) * y_mulconst1
+            + addconst1;
+        let z_2value = self.base.get_variable(x_2) * x_mulconst2
+            - self.base.get_variable(y_2) * y_mulconst2
+            + addconst2;
+        let z_3value = self.base.get_variable(x_3) * x_mulconst3
+            - self.base.get_variable(y_3) * y_mulconst3
+            + addconst3;
+        let z_pvalue =
+            self.base.get_variable(x_p) - self.base.get_variable(y_p) + addconstp;
+
+        let z_0 = self.base.add_variable(z_0value);
+        let z_1 = self.base.add_variable(z_1value);
+        let z_2 = self.base.add_variable(z_2value);
+        let z_3 = self.base.add_variable(z_3value);
+        let z_p = self.base.add_variable(z_pvalue);
+
+        let zero = self.base.zero_idx();
+        let linear_term_scale_factor = Field::<P>::from(2u64);
+
+        // Row 0: q_arith = 3 (note: w_1=y_p, w_4=z_p swapped vs addition)
+        self.blocks
+            .arithmetic
+            .block
+            .populate_wires(y_p, x_0, y_0, z_p);
+        self.blocks
+            .arithmetic
+            .block
+            .q_m_mut()
+            .push(-addconstp);
+        self.blocks
+            .arithmetic
+            .block
+            .q_1_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_2_mut()
+            .push(-(x_mulconst0 * linear_term_scale_factor));
+        self.blocks
+            .arithmetic
+            .block
+            .q_3_mut()
+            .push(y_mulconst0 * linear_term_scale_factor);
+        self.blocks
+            .arithmetic
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_c_mut()
+            .push(-(addconst0 * linear_term_scale_factor));
+        self.blocks
+            .arithmetic
+            .set_gate_selector(Field::from(3u64));
+
+        // Row 1: q_arith = 2 (w_1=x_p)
+        self.blocks
+            .arithmetic
+            .block
+            .populate_wires(x_p, x_1, y_1, z_0);
+        self.blocks
+            .arithmetic
+            .block
+            .q_m_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_1_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_2_mut()
+            .push(-x_mulconst1);
+        self.blocks
+            .arithmetic
+            .block
+            .q_3_mut()
+            .push(y_mulconst1);
+        self.blocks
+            .arithmetic
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_c_mut()
+            .push(-addconst1);
+        self.blocks
+            .arithmetic
+            .set_gate_selector(Field::from(2u64));
+
+        // Row 2: q_arith = 1
+        self.blocks
+            .arithmetic
+            .block
+            .populate_wires(x_2, y_2, z_2, z_1);
+        self.blocks
+            .arithmetic
+            .block
+            .q_m_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_1_mut()
+            .push(-x_mulconst2);
+        self.blocks
+            .arithmetic
+            .block
+            .q_2_mut()
+            .push(y_mulconst2);
+        self.blocks
+            .arithmetic
+            .block
+            .q_3_mut()
+            .push(Field::one());
+        self.blocks
+            .arithmetic
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_c_mut()
+            .push(-addconst2);
+        self.blocks
+            .arithmetic
+            .set_gate_selector(Field::one());
+
+        // Row 3: q_arith = 1
+        self.blocks
+            .arithmetic
+            .block
+            .populate_wires(x_3, y_3, z_3, zero);
+        self.blocks
+            .arithmetic
+            .block
+            .q_m_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_1_mut()
+            .push(-x_mulconst3);
+        self.blocks
+            .arithmetic
+            .block
+            .q_2_mut()
+            .push(y_mulconst3);
+        self.blocks
+            .arithmetic
+            .block
+            .q_3_mut()
+            .push(Field::one());
+        self.blocks
+            .arithmetic
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .arithmetic
+            .block
+            .q_c_mut()
+            .push(-addconst3);
+        self.blocks
+            .arithmetic
+            .set_gate_selector(Field::one());
+
+        self.check_selector_length_consistency();
+        self.base.increment_num_gates(4);
+
+        [z_0, z_1, z_2, z_3, z_p]
     }
 
     // ════════════════════════════════════════════════════════════════════

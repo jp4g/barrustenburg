@@ -333,6 +333,37 @@ pub struct MultiTable {
 //  Non-native field types
 // ════════════════════════════════════════════════════════════════════════
 
+/// Witness indices for a full non-native field multiplication: a * b = q * p + r.
+///
+/// Port of C++ `non_native_multiplication_witnesses`.
+#[derive(Debug, Clone)]
+pub struct NnfMulWitnesses<P: FieldParams> {
+    pub a: [u32; 4],
+    pub b: [u32; 4],
+    pub q: [u32; 4],
+    pub r: [u32; 4],
+    pub neg_modulus: [Field<P>; 4],
+}
+
+/// Witness indices for a partial non-native field multiplication (a * b limbs only).
+///
+/// Port of C++ `non_native_partial_multiplication_witnesses`.
+#[derive(Debug, Clone)]
+pub struct NnfPartialMulWitnesses {
+    pub a: [u32; 4],
+    pub b: [u32; 4],
+}
+
+/// A (witness_index, multiplicative_constant) pair.
+///
+/// Port of C++ `scaled_witness = std::pair<uint32_t, FF>`.
+pub type ScaledWitness<P> = (u32, Field<P>);
+
+/// An addition-gate simple tuple: (x_term, y_term, additive_constant).
+///
+/// Port of C++ `add_simple = std::tuple<scaled_witness, scaled_witness, FF>`.
+pub type NnfAddSimple<P> = (ScaledWitness<P>, ScaledWitness<P>, Field<P>);
+
 /// Cached partial non-native field multiplication.
 ///
 /// Stores the 4-limb witness indices for two operands and intermediate results.
