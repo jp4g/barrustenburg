@@ -1607,7 +1607,7 @@ impl<P: FieldParams> UltraCircuitBuilder<P> {
     /// Port of C++ `UltraCircuitBuilder_::create_gates_from_plookup_accumulators`.
     pub fn create_gates_from_plookup_accumulators(
         &mut self,
-        multi_table: &MultiTable,
+        multi_table: &MultiTable<P>,
         read_values: &ReadData<Field<P>>,
         key_a_index: u32,
         key_b_index: Option<u32>,
@@ -1659,17 +1659,17 @@ impl<P: FieldParams> UltraCircuitBuilder<P> {
             let q_2_val = if is_last_lookup {
                 Field::zero()
             } else {
-                -Field::from(multi_table.column_1_step_sizes[i + 1])
+                -multi_table.column_1_step_sizes[i + 1]
             };
             let q_m_val = if is_last_lookup {
                 Field::zero()
             } else {
-                -Field::from(multi_table.column_2_step_sizes[i + 1])
+                -multi_table.column_2_step_sizes[i + 1]
             };
             let q_c_val = if is_last_lookup {
                 Field::zero()
             } else {
-                -Field::from(multi_table.column_3_step_sizes[i + 1])
+                -multi_table.column_3_step_sizes[i + 1]
             };
 
             self.blocks.lookup.block.q_2_mut().push(q_2_val);
@@ -3740,9 +3740,9 @@ mod tests {
         let multi_table = MultiTable {
             id: MultiTableId(1),
             basic_table_ids: vec![BasicTableId(10)],
-            column_1_step_sizes: vec![1],
-            column_2_step_sizes: vec![1],
-            column_3_step_sizes: vec![1],
+            column_1_step_sizes: vec![Fr::from(1u64)],
+            column_2_step_sizes: vec![Fr::from(1u64)],
+            column_3_step_sizes: vec![Fr::from(1u64)],
         };
 
         let mut read_values = ReadData::<Fr>::default();
@@ -3773,9 +3773,9 @@ mod tests {
         let multi_table = MultiTable {
             id: MultiTableId(1),
             basic_table_ids: vec![BasicTableId(10), BasicTableId(11)],
-            column_1_step_sizes: vec![1, 256],
-            column_2_step_sizes: vec![1, 256],
-            column_3_step_sizes: vec![1, 256],
+            column_1_step_sizes: vec![Fr::from(1u64), Fr::from(256u64)],
+            column_2_step_sizes: vec![Fr::from(1u64), Fr::from(256u64)],
+            column_3_step_sizes: vec![Fr::from(1u64), Fr::from(256u64)],
         };
 
         let mut read_values = ReadData::<Fr>::default();
@@ -3809,9 +3809,9 @@ mod tests {
         let multi_table = MultiTable {
             id: MultiTableId(1),
             basic_table_ids: vec![BasicTableId(10)],
-            column_1_step_sizes: vec![1],
-            column_2_step_sizes: vec![1],
-            column_3_step_sizes: vec![1],
+            column_1_step_sizes: vec![Fr::from(1u64)],
+            column_2_step_sizes: vec![Fr::from(1u64)],
+            column_3_step_sizes: vec![Fr::from(1u64)],
         };
 
         let mut read_values = ReadData::<Fr>::default();
@@ -3842,9 +3842,9 @@ mod tests {
         let multi_table = MultiTable {
             id: MultiTableId(1),
             basic_table_ids: vec![BasicTableId(10)],
-            column_1_step_sizes: vec![1],
-            column_2_step_sizes: vec![1],
-            column_3_step_sizes: vec![1],
+            column_1_step_sizes: vec![Fr::from(1u64)],
+            column_2_step_sizes: vec![Fr::from(1u64)],
+            column_3_step_sizes: vec![Fr::from(1u64)],
         };
 
         let mut read_values = ReadData::<Fr>::default();

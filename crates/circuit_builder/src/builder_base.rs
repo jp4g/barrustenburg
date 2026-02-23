@@ -178,6 +178,16 @@ impl<P: FieldParams> CircuitBuilderBase<P> {
         self.variables[real_idx] = value;
     }
 
+    /// Set the witness value for a variable without mode checks.
+    ///
+    /// Used for testing scenarios where witness values need to be modified
+    /// after circuit construction (e.g., verifying constraint soundness).
+    #[inline]
+    pub fn set_variable_unchecked(&mut self, index: u32, value: Field<P>) {
+        let real_idx = self.real_variable_index[index as usize] as usize;
+        self.variables[real_idx] = value;
+    }
+
     /// Read-only access to all variables.
     pub fn get_variables(&self) -> &[Field<P>] {
         &self.variables
