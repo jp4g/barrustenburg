@@ -1299,11 +1299,18 @@ impl<P: FieldParams, T: FieldParams> BigFieldT<P, T> {
         let t3 = U256::from(1u64)
             .wrapping_shl_vartime((limb_2_borrow_shift - NUM_LIMB_BITS) as u32);
 
-        // Slice constant_to_add into limbs
+        // Slice constant_to_add into 4 limbs of NUM_LIMB_BITS (68) each.
+        // constant_to_add can exceed 2^256, so limb 3 (bits 204-271) crosses
+        // the U256 boundary at bit 256: 52 bits from lo, 16 bits from hi.
+        let cta_hi = constant_to_add.hi();
         let cta_0 = slice_u256(&cta_lo, 0, NUM_LIMB_BITS as u32);
         let cta_1 = slice_u256(&cta_lo, NUM_LIMB_BITS as u32, (NUM_LIMB_BITS * 2) as u32);
         let cta_2 = slice_u256(&cta_lo, (NUM_LIMB_BITS * 2) as u32, (NUM_LIMB_BITS * 3) as u32);
-        let cta_3 = slice_u256(&cta_lo, (NUM_LIMB_BITS * 3) as u32, (NUM_LIMB_BITS * 4) as u32);
+        let remaining_in_lo = 256 - (NUM_LIMB_BITS * 3) as u32; // 52
+        let lo_part = slice_u256(&cta_lo, (NUM_LIMB_BITS * 3) as u32, 256);
+        let hi_bits_needed = NUM_LIMB_BITS as u32 - remaining_in_lo; // 16
+        let hi_part = slice_u256(&cta_hi, 0, hi_bits_needed);
+        let cta_3 = lo_part.wrapping_or(&hi_part.wrapping_shl_vartime(remaining_in_lo));
 
         let to_add_0 = cta_0.wrapping_add(&t0);
         let to_add_1 = cta_1.wrapping_add(&t1);
@@ -1347,7 +1354,14 @@ impl<P: FieldParams, T: FieldParams> BigFieldT<P, T> {
         ];
 
         // Prime basis: self.prime + constant_to_add_mod_native - other.prime
-        let cta_mod_native = Field::<P>::from_limbs(*cta_lo.as_words());
+        // constant_to_add can exceed 2^256, so reduce mod P properly
+        let native_mod_512 =
+            U512::from_lo_hi(U256::from_limbs(P::MODULUS), U256::ZERO);
+        let cta_mod_p = constant_to_add
+            .div_rem(&native_mod_512.to_nz().unwrap())
+            .1
+            .lo();
+        let cta_mod_native = Field::<P>::from_limbs(*cta_mod_p.as_words());
         let prime_to_add = FieldT::from_field(cta_mod_native);
         let new_prime =
             &(&self.prime_basis_limb + &prime_to_add) - &other.prime_basis_limb;
