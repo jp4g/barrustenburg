@@ -135,9 +135,16 @@ impl UltraCircuitChecker {
         // Compute trace offsets
         builder.blocks.compute_offsets();
 
-        // Compute circuit size (round up to next power of 2)
+        // Compute circuit size (round up to next power of 2).
+        // Must account for both execution trace content AND table entries that are
+        // placed after the content (starting at total_content + 1).
         let total_content = builder.blocks.get_total_content_size();
-        let circuit_size = (total_content + 1).next_power_of_two(); // +1 for zero row
+        let total_table_entries: usize = builder
+            .lookup_tables
+            .iter()
+            .map(|t| t.lookup_gates.len())
+            .sum();
+        let circuit_size = (total_content + 1 + total_table_entries).next_power_of_two(); // +1 for zero row
 
         // Populate polynomial columns from the execution trace
         let mut polys = CheckerPolynomials::<P>::new(circuit_size);
