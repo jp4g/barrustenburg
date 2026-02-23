@@ -2947,4 +2947,1640 @@ mod tests {
         // We just check this doesn't panic and the computation is consistent
         let _ = sum;
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Constructor: unsafe_construct_from_limbs
+    //  Port of C++ test_unsafe_construct_from_limbs
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_unsafe_construct_from_limbs() {
+        let builder = make_builder();
+
+        // Create 4 random limbs with slightly more than NUM_LIMB_BITS bits
+        let mask_78 = U256::from(1u64)
+            .wrapping_shl_vartime((NUM_LIMB_BITS + 10) as u32)
+            .wrapping_sub(&U256::ONE);
+        let mask_80 = U256::from(1u64)
+            .wrapping_shl_vartime((NUM_LIMB_BITS + 12) as u32)
+            .wrapping_sub(&U256::ONE);
+
+        let l0_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&mask_78.to_nz().unwrap());
+        let l1_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&mask_78.to_nz().unwrap());
+        let l2_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&mask_78.to_nz().unwrap());
+        let l3_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&mask_80.to_nz().unwrap());
+
+        let l0 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l0_val.as_words()));
+        let l1 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l1_val.as_words()));
+        let l2 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l2_val.as_words()));
+        let l3 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l3_val.as_words()));
+
+        let result = BFq::unsafe_construct_from_limbs(l0, l1, l2, l3, true);
+
+        // Verify prime basis limb is correctly computed
+        let s1 = shift_1::<Bn254FrParams>();
+        let s2 = shift_2::<Bn254FrParams>();
+        let s3 = shift_3::<Bn254FrParams>();
+        let expected_prime = Fr::from_limbs(*l0_val.as_words())
+            + Fr::from_limbs(*l1_val.as_words()) * s1
+            + Fr::from_limbs(*l2_val.as_words()) * s2
+            + Fr::from_limbs(*l3_val.as_words()) * s3;
+        assert_eq!(result.prime_basis_limb.get_value(), expected_prime);
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Regression: badmul (same as division_formula)
+    //  Port of C++ test_bad_mul
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_badmul_regression() {
+        let builder = make_builder();
+        let two = Fq::from(2u64);
+        let tval = make_witness(builder.clone(), two);
+        let tval1 = tval.sub(&tval); // 0
+        let _tval2 = tval1.div(&tval); // 0 / 2 = 0
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Arithmetic: madd with constants
+    //  Port of C++ test_madd with constant variants
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_madd_with_constants() {
+        // w * w + c
+        {
+            let builder = make_builder();
+            for _ in 0..4 {
+                let (a_fq, _) = random_fq();
+                let (b_fq, _) = random_fq();
+                let (c_fq, _) = random_fq();
+                let a = make_witness(builder.clone(), a_fq);
+                let b = make_witness(builder.clone(), b_fq);
+                let c = make_constant(c_fq);
+                let result = a.madd(&b, &[&c]);
+                assert_bigfield_eq(&result, a_fq * b_fq + c_fq);
+            }
+            assert!(check_circuit(&builder).is_ok());
+        }
+        // w * c + w
+        {
+            let builder = make_builder();
+            for _ in 0..4 {
+                let (a_fq, _) = random_fq();
+                let (b_fq, _) = random_fq();
+                let (c_fq, _) = random_fq();
+                let a = make_witness(builder.clone(), a_fq);
+                let b = make_constant(b_fq);
+                let c = make_witness(builder.clone(), c_fq);
+                let result = a.madd(&b, &[&c]);
+                assert_bigfield_eq(&result, a_fq * b_fq + c_fq);
+            }
+            assert!(check_circuit(&builder).is_ok());
+        }
+        // c * w + w
+        {
+            let builder = make_builder();
+            for _ in 0..4 {
+                let (a_fq, _) = random_fq();
+                let (b_fq, _) = random_fq();
+                let (c_fq, _) = random_fq();
+                let a = make_constant(a_fq);
+                let b = make_witness(builder.clone(), b_fq);
+                let c = make_witness(builder.clone(), c_fq);
+                let result = a.madd(&b, &[&c]);
+                assert_bigfield_eq(&result, a_fq * b_fq + c_fq);
+            }
+            assert!(check_circuit(&builder).is_ok());
+        }
+        // w * c + c
+        {
+            let builder = make_builder();
+            for _ in 0..4 {
+                let (a_fq, _) = random_fq();
+                let (b_fq, _) = random_fq();
+                let (c_fq, _) = random_fq();
+                let a = make_witness(builder.clone(), a_fq);
+                let b = make_constant(b_fq);
+                let c = make_constant(c_fq);
+                let result = a.madd(&b, &[&c]);
+                assert_bigfield_eq(&result, a_fq * b_fq + c_fq);
+            }
+            assert!(check_circuit(&builder).is_ok());
+        }
+        // c * w + c
+        {
+            let builder = make_builder();
+            for _ in 0..4 {
+                let (a_fq, _) = random_fq();
+                let (b_fq, _) = random_fq();
+                let (c_fq, _) = random_fq();
+                let a = make_constant(a_fq);
+                let b = make_witness(builder.clone(), b_fq);
+                let c = make_constant(c_fq);
+                let result = a.madd(&b, &[&c]);
+                assert_bigfield_eq(&result, a_fq * b_fq + c_fq);
+            }
+            assert!(check_circuit(&builder).is_ok());
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Arithmetic: madd with multiple addends
+    //  Port of C++ test_madd with multiple addends
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_madd_multiple_addends() {
+        let builder = make_builder();
+        for _ in 0..4 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let (c_fq, _) = random_fq();
+            let (d_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let b = make_witness(builder.clone(), b_fq);
+            let c = make_witness(builder.clone(), c_fq);
+            let d = make_witness(builder.clone(), d_fq);
+            let result = a.madd(&b, &[&c, &d]);
+            assert_bigfield_eq(&result, a_fq * b_fq + c_fq + d_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Arithmetic: madd with no addends (a * b + 0)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_madd_no_addends() {
+        let builder = make_builder();
+        for _ in 0..4 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let b = make_witness(builder.clone(), b_fq);
+            let result = a.madd(&b, &[]);
+            assert_bigfield_eq(&result, a_fq * b_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Conditional: conditional_select with constants
+    //  Port of C++ conditional_select_with_constants
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_conditional_select_with_constants() {
+        // witness operands, constant predicate
+        {
+            let builder = make_builder();
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let b = make_witness(builder.clone(), b_fq);
+
+            let pred_true = BoolT::from_constant(true);
+            let result = a.conditional_select(&b, &pred_true);
+            assert_bigfield_eq(&result, b_fq);
+
+            let pred_false = BoolT::from_constant(false);
+            let result2 = a.conditional_select(&b, &pred_false);
+            assert_bigfield_eq(&result2, a_fq);
+            assert!(check_circuit(&builder).is_ok());
+        }
+        // constant operands, witness predicate
+        {
+            let builder = make_builder();
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = BFq::from_u256(Some(builder.clone()), fq_to_u256(a_fq));
+            let b = BFq::from_u256(Some(builder.clone()), fq_to_u256(b_fq));
+
+            let pred = BoolT::from_witness(&WitnessT::new(builder.clone(), Fr::one()));
+            let result = a.conditional_select(&b, &pred);
+            assert_bigfield_eq(&result, b_fq);
+            assert!(check_circuit(&builder).is_ok());
+        }
+        // constant operands, constant predicate
+        {
+            let builder = make_builder();
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = BFq::from_u256(Some(builder.clone()), fq_to_u256(a_fq));
+            let b = BFq::from_u256(Some(builder.clone()), fq_to_u256(b_fq));
+
+            let pred = BoolT::from_constant(true);
+            let result = a.conditional_select(&b, &pred);
+            assert_bigfield_eq(&result, b_fq);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Conditional: conditional_negate with constants
+    //  Port of C++ conditional_negate_with_constants
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_conditional_negate_with_constants() {
+        // constant value, witness predicate
+        {
+            let builder = make_builder();
+            let (a_fq, _) = random_fq();
+            let a = BFq::from_u256(Some(builder.clone()), fq_to_u256(a_fq));
+
+            let pred = BoolT::from_witness(&WitnessT::new(builder.clone(), Fr::one()));
+            let mut result = a.conditional_negate(&pred);
+            result.self_reduce();
+            assert_bigfield_eq(&result, -a_fq);
+            assert!(check_circuit(&builder).is_ok());
+        }
+        // witness value, constant predicate
+        {
+            let builder = make_builder();
+            let (a_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+
+            let pred = BoolT::from_constant(true);
+            let mut result = a.conditional_negate(&pred);
+            result.self_reduce();
+            assert_bigfield_eq(&result, -a_fq);
+            assert!(check_circuit(&builder).is_ok());
+        }
+        // constant value, constant predicate
+        {
+            let (a_fq, _) = random_fq();
+            let a = make_constant(a_fq);
+            let pred = BoolT::from_constant(true);
+            let mut result = a.conditional_negate(&pred);
+            result.reduction_check();
+            assert_bigfield_eq(&result, -a_fq);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Equality with constants
+    //  Port of C++ test_equality_operator with constant variants
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_equality_with_constants() {
+        // witness == constant (same value)
+        {
+            let builder = make_builder();
+            let (a_fq, _) = random_fq();
+            let a_w = make_witness(builder.clone(), a_fq);
+            let a_c = BFq::from_u256(Some(builder.clone()), fq_to_u256(a_fq));
+            let result = a_w.eq(&a_c);
+            assert!(result.get_value(), "witness should equal constant with same value");
+            assert!(check_circuit(&builder).is_ok());
+        }
+        // constant == witness (same value)
+        {
+            let builder = make_builder();
+            let (a_fq, _) = random_fq();
+            let a_c = BFq::from_u256(Some(builder.clone()), fq_to_u256(a_fq));
+            let a_w = make_witness(builder.clone(), a_fq);
+            let result = a_c.eq(&a_w);
+            assert!(result.get_value(), "constant should equal witness with same value");
+            assert!(check_circuit(&builder).is_ok());
+        }
+        // constant == constant (same value)
+        {
+            let (a_fq, _) = random_fq();
+            let a = make_constant(a_fq);
+            let b = make_constant(a_fq);
+            let result = a.eq(&b);
+            assert!(result.get_value(), "constants with same value should be equal");
+        }
+        // witness != constant
+        {
+            let builder = make_builder();
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            if a_fq != b_fq {
+                let a = make_witness(builder.clone(), a_fq);
+                let b = BFq::from_u256(Some(builder.clone()), fq_to_u256(b_fq));
+                let result = a.eq(&b);
+                assert!(!result.get_value(), "different values should not be equal");
+                assert!(check_circuit(&builder).is_ok());
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Combined: assert_equal and assert_is_not_equal together
+    //  Port of C++ test_assert_equal_not_equal
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_assert_equal_not_equal() {
+        let builder = make_builder();
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let (c_fq, _) = random_fq();
+            let (d_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let c = make_witness(builder.clone(), c_fq);
+            let d = make_witness(builder.clone(), d_fq);
+
+            // Construct "2" via unsafe_construct_from_limbs
+            let two_l0 = FieldT::from_witness(builder.clone(), Fr::from(2u64));
+            let zero_l = FieldT::from_witness(builder.clone(), Fr::zero());
+            let two_ct = BFq::unsafe_construct_from_limbs(
+                two_l0,
+                zero_l.clone(),
+                zero_l.clone(),
+                zero_l,
+                false,
+            );
+
+            let t0 = a.add(&a); // a + a
+            let t1 = a.mul(&two_ct); // a * 2
+
+            t0.assert_equal(&t1, "a+a should equal a*2");
+            if c_fq != a_fq + a_fq {
+                t0.assert_is_not_equal(&c, "t0 should not equal c");
+            }
+            if d_fq != a_fq + a_fq {
+                t0.assert_is_not_equal(&d, "t0 should not equal d");
+            }
+
+            let is_eq = t0.eq(&t1);
+            assert!(is_eq.get_value(), "a+a should == a*2");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Compound: add_and_mul with constants
+    //  Port of C++ test_add_and_mul with constant summands
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_add_and_mul_with_constants() {
+        let builder = make_builder();
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let (c_fq, _) = random_fq();
+            let (d_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let b = make_constant(b_fq);
+            let c = make_witness(builder.clone(), c_fq);
+            let d = make_constant(d_fq);
+
+            let sum_ab = a.add(&b);
+            let sum_cd = c.add(&d);
+            let result = sum_ab.mul(&sum_cd);
+            assert_bigfield_eq(&result, (a_fq + b_fq) * (c_fq + d_fq));
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Compound: sub_and_mul with constants
+    //  Port of C++ test_sub_and_mul with constant subtrahends
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_sub_and_mul_with_constants() {
+        let builder = make_builder();
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let (c_fq, _) = random_fq();
+            let (d_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let b = make_constant(b_fq);
+            let c = make_witness(builder.clone(), c_fq);
+            let d = make_constant(d_fq);
+
+            let diff_ab = a.sub(&b);
+            let diff_cd = c.sub(&d);
+            let result = diff_ab.mul(&diff_cd);
+            assert_bigfield_eq(&result, (a_fq - b_fq) * (c_fq - d_fq));
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Constant-constant operations: div, sub
+    //  Port of C++ div/sub with CONSTANT/CONSTANT variants
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_div_constant_constant() {
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            if b_fq == Fq::zero() { continue; }
+            let a = make_constant(a_fq);
+            let b = make_constant(b_fq);
+            let c = a.div(&b);
+            assert_bigfield_eq(&c, a_fq * b_fq.invert());
+        }
+    }
+
+    #[test]
+    fn test_sub_constant_constant() {
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = make_constant(a_fq);
+            let b = make_constant(b_fq);
+            let mut c = a.sub(&b);
+            c.reduction_check();
+            assert_bigfield_eq(&c, a_fq - b_fq);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Constant-witness and witness-constant: div, sub
+    //  Port of C++ constant/witness variants
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_div_constant_witness() {
+        let builder = make_builder();
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            if b_fq == Fq::zero() { continue; }
+            let a = BFq::from_u256(Some(builder.clone()), fq_to_u256(a_fq));
+            let b = make_witness(builder.clone(), b_fq);
+            let c = a.div(&b);
+            assert_bigfield_eq(&c, a_fq * b_fq.invert());
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_sub_constant_witness() {
+        let builder = make_builder();
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = BFq::from_u256(Some(builder.clone()), fq_to_u256(a_fq));
+            let b = make_witness(builder.clone(), b_fq);
+            let mut c = a.sub(&b);
+            c.self_reduce();
+            assert_bigfield_eq(&c, a_fq - b_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_mul_constant_witness() {
+        let builder = make_builder();
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = BFq::from_u256(Some(builder.clone()), fq_to_u256(a_fq));
+            let b = make_witness(builder.clone(), b_fq);
+            let c = a.mul(&b);
+            assert_bigfield_eq(&c, a_fq * b_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_add_constant_witness() {
+        let builder = make_builder();
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = BFq::from_u256(Some(builder.clone()), fq_to_u256(a_fq));
+            let b = make_witness(builder.clone(), b_fq);
+            let mut c = a.add(&b);
+            c.self_reduce();
+            assert_bigfield_eq(&c, a_fq + b_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Negate with constant
+    //  Port of C++ test_negate constant variant
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_negate_constant() {
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let a = make_constant(a_fq);
+            let mut c = a.negate();
+            c.reduction_check();
+            assert_bigfield_eq(&c, -a_fq);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Sqr with constant (more thorough)
+    //  Port of C++ test_sqr CONSTANT variant
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_sqr_constant_thorough() {
+        // Already have test_sqr_constant, but this covers constant-constant mul consistency
+        for _ in 0..10 {
+            let (a_fq, _) = random_fq();
+            let a = make_constant(a_fq);
+            let c = a.sqr();
+            let d = a.mul(&a);
+            // Both should give a^2
+            assert_bigfield_eq(&c, a_fq * a_fq);
+            assert_bigfield_eq(&d, a_fq * a_fq);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Group operations (elliptic curve point addition via bigfield)
+    //  Port of C++ test_group_operations
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_group_operations() {
+        // Perform EC point addition using bigfield arithmetic
+        // y = x^3 + 3 (bn254 curve b=3) for verification
+        let builder = make_builder();
+
+        // Use known BN254 generator G1 and 2*G1
+        // P1 = random point, P2 = random point (we construct from random x,y pairs on curve)
+        // For simplicity, use small known values
+        let (x1_fq, _) = random_fq();
+        let (x2_fq, _) = random_fq();
+
+        // Compute y^2 = x^3 + 3 (bn254 b parameter)
+        let three = Fq::from(3u64);
+        let y1_sq = x1_fq * x1_fq * x1_fq + three;
+        let y2_sq = x2_fq * x2_fq * x2_fq + three;
+
+        // Skip if not QR (not on curve)
+        // We just test the bigfield arithmetic pattern, not actual curve point validation
+
+        let x1 = make_witness(builder.clone(), x1_fq);
+        let x2 = make_witness(builder.clone(), x2_fq);
+
+        // Compute lambda = (y2 - y1) / (x2 - x1) using bigfield
+        // For testing purposes, use dummy y values and just verify the arithmetic
+        let y1_fq = y1_sq; // not actually square root, but testing arithmetic
+        let y2_fq = y2_sq;
+        let y1 = make_witness(builder.clone(), y1_fq);
+        let y2 = make_witness(builder.clone(), y2_fq);
+
+        if x1_fq != x2_fq {
+            let lambda = y2.sub(&y1).div(&x2.sub(&x1));
+            let x3 = lambda.sqr().sub(&x2).sub(&x1);
+            let _y3 = x1.sub(&x3).mul(&lambda).sub(&y1);
+
+            // Verify algebraically
+            let expected_lambda = (y2_fq - y1_fq) * (x2_fq - x1_fq).invert();
+            let expected_x3 = expected_lambda * expected_lambda - x2_fq - x1_fq;
+            let expected_y3 = (x1_fq - expected_x3) * expected_lambda - y1_fq;
+
+            assert_bigfield_eq(&x3, expected_x3);
+            assert_bigfield_eq(&_y3, expected_y3);
+            assert!(check_circuit(&builder).is_ok());
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Reduce (thorough) — b*b + c chain
+    //  Port of C++ test_reduce
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_reduce_thorough() {
+        let builder = make_builder();
+        for _ in 0..4 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let b = make_witness(builder.clone(), b_fq);
+
+            let mut c = a.clone();
+            let mut expected = a_fq;
+            for _ in 0..16 {
+                c = b.mul(&b).add(&c);
+                expected = b_fq * b_fq + expected;
+            }
+
+            c.self_reduce();
+
+            let modulus = BFq::modulus();
+            let val = c.get_value().lo();
+            assert!(val < modulus, "reduce: value not in field");
+            assert_bigfield_eq(&c, expected);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Edge case: larger_than_bigfield_allowed
+    //  Port of C++ test_larger_than_bigfield_allowed
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_larger_than_bigfield_allowed() {
+        let builder = make_builder();
+        let modulus = U256::from_limbs(Bn254FqParams::MODULUS);
+
+        // Values >= modulus (created with can_overflow=true)
+        let values = [
+            U512::from_lo_hi(modulus, U256::ZERO),                              // p
+            U512::from_lo_hi(modulus.wrapping_add(&U256::ONE), U256::ZERO),     // p + 1
+        ];
+
+        for value in &values {
+            let bf = BFq::create_from_u512_as_witness(builder.clone(), *value, true, 0);
+            assert!(bf.get_value() >= BFq::modulus_u512(), "value should be >= modulus");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Edge case: invariants_during_addition
+    //  Port of C++ test_invariants_during_addition
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Check that limb maximum values are >= actual witness values.
+    fn check_invariants(bf: &BFq, label: &str) {
+        for i in 0..4 {
+            let witness_val = {
+                let v = bf.binary_basis_limbs[i].element.get_value().from_montgomery_form();
+                U256::from_words(v.data)
+            };
+            let max_val = bf.binary_basis_limbs[i].maximum_value;
+            assert!(
+                max_val >= witness_val,
+                "invariant violation in {}: limb[{}] max {} < witness {}",
+                label, i, max_val, witness_val
+            );
+        }
+    }
+
+    #[test]
+    fn test_invariants_during_addition() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+
+        let c = a.add(&b);
+        check_invariants(&c, "addition (initial)");
+
+        // Chain additions
+        let mut result = c;
+        for _ in 0..5 {
+            let (e_fq, _) = random_fq();
+            let e = make_witness(builder.clone(), e_fq);
+            result = result.add(&e);
+            check_invariants(&result, "addition (chain)");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_invariants_during_subtraction() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+
+        let c = a.sub(&b);
+        check_invariants(&c, "subtraction (initial)");
+
+        let mut result = c;
+        for _ in 0..5 {
+            let (e_fq, _) = random_fq();
+            let e = make_witness(builder.clone(), e_fq);
+            result = result.sub(&e);
+            check_invariants(&result, "subtraction (chain)");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_invariants_during_multiplication() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+
+        let c = a.mul(&b);
+        check_invariants(&c, "multiplication (initial)");
+
+        let mut result = c;
+        for _ in 0..3 {
+            let (e_fq, _) = random_fq();
+            let e = make_witness(builder.clone(), e_fq);
+            result = result.mul(&e);
+            check_invariants(&result, "multiplication (chain)");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_invariants_during_division() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        if b_fq == Fq::zero() { return; }
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+
+        let c = a.div(&b);
+        check_invariants(&c, "division (initial)");
+
+        let mut result = c;
+        for _ in 0..3 {
+            let (e_fq, _) = random_fq();
+            if e_fq == Fq::zero() { continue; }
+            let e = make_witness(builder.clone(), e_fq);
+            result = result.div(&e);
+            check_invariants(&result, "division (chain)");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_invariants_during_squaring() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+
+        let c = a.sqr();
+        check_invariants(&c, "squaring");
+
+        // Chain squarings
+        let mut result = c;
+        for _ in 0..3 {
+            result = result.sqr();
+            check_invariants(&result, "squaring (chain)");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_invariants_during_negation() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+
+        let c = a.negate();
+        check_invariants(&c, "negation");
+
+        // Chain negations
+        let mut result = c;
+        for _ in 0..5 {
+            result = result.negate();
+            check_invariants(&result, "negation (chain)");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Edge case: assert_is_in_field with edge case values
+    //  Port of C++ edge case assert_is_in_field
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_assert_is_in_field_edge_cases() {
+        let builder = make_builder();
+        let modulus = U256::from_limbs(Bn254FqParams::MODULUS);
+
+        let edge_values = [
+            U256::ZERO,                              // 0
+            U256::ONE,                               // 1
+            modulus.wrapping_sub(&U256::ONE),         // p-1
+        ];
+
+        for val in &edge_values {
+            let bf = BFq::from_witness(builder.clone(), *val);
+            bf.assert_is_in_field("edge case should be in field");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Edge case: assert_less_than with sorted edge values
+    //  Port of C++ edge case assert_less_than
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_assert_less_than_edge_cases() {
+        let builder = make_builder();
+        let modulus = U256::from_limbs(Bn254FqParams::MODULUS);
+
+        // Sorted ascending edge values
+        let edge_values = [
+            U256::ZERO,
+            U256::ONE,
+            modulus.wrapping_sub(&U256::ONE),
+        ];
+
+        // Each smaller value should be less than each larger value
+        for i in 0..edge_values.len() - 1 {
+            for j in (i + 1)..edge_values.len() {
+                let bf = BFq::from_witness(builder.clone(), edge_values[i]);
+                bf.assert_less_than(edge_values[j], "edge smaller < edge larger");
+            }
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Edge case: assert_equal with values that are equal mod p
+    //  Port of C++ test_assert_equal_edge_case
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_assert_equal_edge_case() {
+        // Test assert_equal with values computed via different arithmetic paths
+        let builder = make_builder();
+
+        // Two different ways to compute the same value
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+
+        // Path 1: a + b
+        let sum1 = a.add(&b);
+        // Path 2: b + a
+        let sum2 = b.add(&a);
+        sum1.assert_equal(&sum2, "a+b should equal b+a");
+
+        // Path 3: a*b via different routes
+        let prod1 = a.mul(&b);
+        let prod2 = b.mul(&a);
+        prod1.assert_equal(&prod2, "a*b should equal b*a");
+
+        // Path 4: (a-a) should equal 0
+        let diff = a.sub(&a);
+        let zero = make_witness(builder.clone(), Fq::zero());
+        diff.assert_equal(&zero, "a-a should equal 0");
+
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Max value tracking during addition
+    //  Port of C++ test_maximum_value_tracking_during_addition
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_max_value_tracking_during_addition() {
+        let builder = make_builder();
+        let mask = U256::from(1u64).wrapping_shl_vartime(NUM_LIMB_BITS as u32).wrapping_sub(&U256::ONE);
+        let small_mask = U256::from(1u64).wrapping_shl_vartime(40).wrapping_sub(&U256::ONE);
+
+        let l0_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&mask.to_nz().unwrap());
+        let l1_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&mask.to_nz().unwrap());
+        let l2_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&mask.to_nz().unwrap());
+        let l3_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&small_mask.to_nz().unwrap());
+
+        let l0 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l0_val.as_words()));
+        let l1 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l1_val.as_words()));
+        let l2 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l2_val.as_words()));
+        let l3 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l3_val.as_words()));
+
+        let mut combined = BFq::unsafe_construct_from_limbs(l0, l1, l2, l3, true);
+        combined.binary_basis_limbs[3].maximum_value = small_mask;
+
+        // Add to self several times — max value should increase each time
+        for _ in 0..10 {
+            let prev_max = combined.binary_basis_limbs[0].maximum_value;
+            let prev_msb = prev_max.get_msb();
+            combined = combined.add(&combined.clone());
+            let new_msb = combined.binary_basis_limbs[0].maximum_value.get_msb();
+            // Max value should increase by ~1 bit per doubling
+            assert!(new_msb >= prev_msb, "max value should grow during addition");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Reduction check works (values > max unreduced trigger reduction)
+    //  Port of C++ test_reduction_check_works
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_reduction_check_works() {
+        let builder = make_builder();
+        let mask = U256::from(1u64).wrapping_shl_vartime(NUM_LIMB_BITS as u32).wrapping_sub(&U256::ONE);
+        let msb_mask = U256::from(1u64).wrapping_shl_vartime(61).wrapping_sub(&U256::ONE);
+
+        let l0_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&mask.to_nz().unwrap());
+        let l1_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&mask.to_nz().unwrap());
+        let l2_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&mask.to_nz().unwrap());
+        let mut l3_val = fq_to_u256(Fq::random_element()).wrapping_rem_vartime(&msb_mask.to_nz().unwrap());
+        // Set 61st bit to ensure value > 2^265
+        l3_val = l3_val.wrapping_or(&U256::from(1u64).wrapping_shl_vartime(60));
+
+        let l0 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l0_val.as_words()));
+        let l1 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l1_val.as_words()));
+        let l2 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l2_val.as_words()));
+        let l3 = FieldT::from_witness(builder.clone(), Fr::from_limbs(*l3_val.as_words()));
+
+        let mut combined = BFq::unsafe_construct_from_limbs(l0, l1, l2, l3, true);
+        combined.binary_basis_limbs[3].maximum_value = msb_mask;
+
+        // Squaring should trigger self-reduction
+        let _sq = combined.sqr();
+
+        // After squaring triggers reduction, verify limbs are in range
+        let max_unreduced = get_maximum_unreduced_limb_value::<Bn254FrParams>();
+        for i in 0..4 {
+            assert!(
+                combined.binary_basis_limbs[i].maximum_value <= max_unreduced,
+                "after reduction: limb {} max too large", i
+            );
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Negate constant + witness roundtrip
+    //  Port of C++ conditional_negate pattern from test_conditional_negate
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_conditional_negate_roundtrip() {
+        // a.conditional_negate(true) + a.conditional_negate(false) should == 0
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+
+        let pred_true = BoolT::from_witness(&WitnessT::new(builder.clone(), Fr::one()));
+        let pred_false = BoolT::from_witness(&WitnessT::new(builder.clone(), Fr::zero()));
+
+        let mut neg_a = a.conditional_negate(&pred_true);
+        let pos_a = a.conditional_negate(&pred_false);
+
+        neg_a.self_reduce();
+        assert_bigfield_eq(&neg_a, -a_fq);
+        assert_bigfield_eq(&pos_a, a_fq);
+
+        // Sum should be zero
+        let mut sum = neg_a.add(&pos_a);
+        sum.self_reduce();
+        assert_bigfield_eq(&sum, Fq::zero());
+
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Internal div regression
+    //  Port of C++ test_internal_div_regression
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_internal_div_regression() {
+        let builder = make_builder();
+
+        let w0 = make_witness(builder.clone(), Fq::one());
+        let pred_true = BoolT::from_witness(&WitnessT::new(builder.clone(), Fr::one()));
+        let pred_false = BoolT::from_witness(&WitnessT::new(builder.clone(), Fr::zero()));
+
+        let w0 = w0.conditional_negate(&pred_true);  // -1
+        let w0 = w0.conditional_negate(&pred_false);  // -1
+        let w0 = w0.conditional_negate(&pred_true);  // 1
+        let w0 = w0.conditional_negate(&pred_true);  // -1
+        let w4 = w0.conditional_negate(&pred_false); // -1
+        let w4 = w4.conditional_negate(&pred_true);  // 1
+        let w4 = w4.conditional_negate(&pred_true);  // -1
+
+        let w5 = w4.sub(&w0); // -1 - (-1) = 0
+        let one = make_witness(builder.clone(), Fq::one());
+        let _w6 = w5.div(&one); // 0 / 1 = 0
+
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Quotient completeness with sqr after many additions
+    //  Port of C++ test_quotient_completeness (more variants)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_quotient_completeness_mul_variant() {
+        // Near-max value, doubled 8 times, then multiplied with itself
+        let builder = make_builder();
+        let val = U256::from_words([
+            0xfffffffffffffffe,
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+            0x3fffffffffffffff,
+        ]);
+        let modulus = U256::from_limbs(Bn254FqParams::MODULUS);
+        let val_reduced = val.div_rem(&modulus.to_nz().unwrap()).1;
+
+        let mut a = BFq::from_witness(builder.clone(), val_reduced);
+        let mut a2 = a.clone();
+
+        for _ in 0..8 {
+            let a_copy = a.clone();
+            a = a.add(&a_copy);
+            let a2_copy = a2.clone();
+            a2 = a2.add(&a2_copy);
+        }
+
+        // Multiply a * a
+        let _b = a.mul(&a2);
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Madd with empty addends (quotient completeness variant)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_quotient_completeness_madd_variant() {
+        let builder = make_builder();
+        let val = U256::from_words([
+            0xfffffffffffffffe,
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+            0x3fffffffffffffff,
+        ]);
+        let modulus = U256::from_limbs(Bn254FqParams::MODULUS);
+        let val_reduced = val.div_rem(&modulus.to_nz().unwrap()).1;
+
+        let mut a = BFq::from_witness(builder.clone(), val_reduced);
+
+        for _ in 0..8 {
+            let a_copy = a.clone();
+            a = a.add(&a_copy);
+        }
+
+        // madd with no addends = a * a
+        let a2 = a.clone();
+        let _e = a.madd(&a2, &[]);
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Sqr of witness from field_pair
+    //  Port of C++ test_sqr with various input types
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_sqr_from_field_pair() {
+        let builder = make_builder();
+        for _ in 0..10 {
+            let (a_fq, u) = random_fq();
+            let lo_val = slice_u256(&u, 0, (NUM_LIMB_BITS * 2) as u32);
+            let hi_val = slice_u256(&u, (NUM_LIMB_BITS * 2) as u32, (NUM_LIMB_BITS * 4) as u32);
+
+            let lo = FieldT::from_witness(builder.clone(), Fr::from_limbs(*lo_val.as_words()));
+            let hi = FieldT::from_witness(builder.clone(), Fr::from_limbs(*hi_val.as_words()));
+            let bf = BFq::from_field_pair(lo, hi, false, 0);
+
+            let sq = bf.sqr();
+            assert_bigfield_eq(&sq, a_fq * a_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  assert_is_in_field after arithmetic (success path)
+    //  Port of C++ test_assert_is_in_field_success
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_assert_is_in_field_after_arithmetic() {
+        let builder = make_builder();
+        for _ in 0..4 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let b = make_witness(builder.clone(), b_fq);
+
+            let mut c = a.clone();
+            let mut expected = a_fq;
+            for _ in 0..16 {
+                c = b.mul(&b).add(&c);
+                expected = b_fq * b_fq + expected;
+            }
+
+            c.self_reduce();
+            c.assert_is_in_field("result after arithmetic should be in field");
+
+            assert_bigfield_eq(&c, expected);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  assert_less_than success with 200-bit values
+    //  Port of C++ test_assert_less_than_success
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_assert_less_than_200bit() {
+        let builder = make_builder();
+        let bit_mask = U256::from(1u64)
+            .wrapping_shl_vartime(200)
+            .wrapping_sub(&U256::ONE);
+
+        for _ in 0..10 {
+            let (_, u) = random_fq();
+            let small_val = u.wrapping_rem_vartime(&bit_mask.to_nz().unwrap());
+
+            let a = BFq::from_witness(builder.clone(), small_val);
+            a.assert_less_than(
+                U256::from(1u64).wrapping_shl_vartime(200),
+                "should be < 2^200",
+            );
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Division context: result has a context
+    //  Port of C++ test_division_context
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_division_context() {
+        let builder = make_builder();
+        let one = BFq::from_u256(Some(builder.clone()), U256::ONE);
+        // Dividing empty numerator by a non-zero denominator
+        // In Rust, we just check that div returns a result with context
+        let a = make_witness(builder.clone(), Fq::one());
+        let result = a.div(&one);
+        assert!(result.get_context().is_some(), "division result should have a context");
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Inversion: constant and witness
+    //  Port of C++ test_inversion
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_inversion_witness() {
+        let builder = make_builder();
+        let neg7 = -Fq::from(7u64);
+        let a = make_witness(builder.clone(), neg7);
+        let one = make_witness(builder.clone(), Fq::one());
+        let inv = one.div(&a);
+        let expected = neg7.invert();
+        assert_bigfield_eq(&inv, expected);
+
+        // Verify a * inv = 1
+        let product = a.mul(&inv);
+        assert_bigfield_eq(&product, Fq::one());
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Constructor: from_u512_as_witness with various values
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_create_from_u512_overflow() {
+        let builder = make_builder();
+        let modulus = U256::from_limbs(Bn254FqParams::MODULUS);
+
+        // Value exactly at modulus (with can_overflow=true)
+        let bf = BFq::create_from_u512_as_witness(
+            builder.clone(),
+            U512::from_lo_hi(modulus, U256::ZERO),
+            true,
+            0,
+        );
+        // The value should be >= modulus (not auto-reduced when can_overflow=true)
+        assert!(bf.get_value() >= BFq::modulus_u512());
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Multiple operations chained (stress test)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_chain_operations() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let (c_fq, _) = random_fq();
+
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+        let c = make_witness(builder.clone(), c_fq);
+
+        // Compute (a + b) * c - a^2
+        let sum = a.add(&b);
+        let prod = sum.mul(&c);
+        let sq = a.sqr();
+        let result = prod.sub(&sq);
+
+        let expected = (a_fq + b_fq) * c_fq - a_fq * a_fq;
+        let mut result_reduced = result;
+        result_reduced.self_reduce();
+        assert_bigfield_eq(&result_reduced, expected);
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Conditional select roundtrip
+    //  Port of C++ conditional_select with !predicate
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_conditional_select_roundtrip() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+
+        let pred = BoolT::from_witness(&WitnessT::new(builder.clone(), Fr::one()));
+        let not_pred = BoolT::from_witness(&WitnessT::new(builder.clone(), Fr::zero()));
+
+        // pred=true → select b; pred=false → select a
+        let c = a.conditional_select(&b, &pred);
+        let d = a.conditional_select(&b, &not_pred);
+
+        assert_bigfield_eq(&c, b_fq);
+        assert_bigfield_eq(&d, a_fq);
+
+        // c + d should equal a + b
+        let mut sum = c.add(&d);
+        sum.self_reduce();
+        assert_bigfield_eq(&sum, a_fq + b_fq);
+
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Equality: eq with arithmetic results
+    //  Port of C++ test_equality_operator with computed values
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_eq_after_arithmetic() {
+        let builder = make_builder();
+        for _ in 0..5 {
+            let (a_fq, a_u) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            // Create another witness from the same native value
+            let another_a = BFq::create_from_u512_as_witness(
+                builder.clone(),
+                U512::from_lo_hi(a_u, U256::ZERO),
+                true,
+                0,
+            );
+            let result = a.eq(&another_a);
+            assert!(result.get_value(), "same native value should be equal");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Compound: multiple additions then sqr
+    //  Extended quotient completeness test
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_many_additions_then_sqr() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+
+        // Add 20 times to accumulate overflow
+        let mut sum = a.clone();
+        let mut expected = a_fq;
+        for _ in 0..20 {
+            let (b_fq, _) = random_fq();
+            let b = make_witness(builder.clone(), b_fq);
+            sum = sum.add(&b);
+            expected = expected + b_fq;
+        }
+
+        // Now square (this should trigger internal reduction)
+        let result = sum.sqr();
+        assert_bigfield_eq(&result, expected * expected);
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Edge: zero division by one
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_zero_div_one() {
+        let builder = make_builder();
+        let zero = make_witness(builder.clone(), Fq::zero());
+        let one = make_witness(builder.clone(), Fq::one());
+        let result = zero.div(&one);
+        assert_bigfield_eq(&result, Fq::zero());
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Edge: negate zero
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_negate_zero() {
+        let builder = make_builder();
+        let zero = make_witness(builder.clone(), Fq::zero());
+        let mut result = zero.negate();
+        result.self_reduce();
+        assert_bigfield_eq(&result, Fq::zero());
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Edge: a * a using madd
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_madd_as_sqr() {
+        let builder = make_builder();
+        for _ in 0..5 {
+            let (a_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let sqr = a.sqr();
+            let madd_sq = a.madd(&a, &[]);
+            // Both should match a^2
+            assert_bigfield_eq(&sqr, a_fq * a_fq);
+            assert_bigfield_eq(&madd_sq, a_fq * a_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Edge: sub then add (should cancel)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_sub_then_add_cancel() {
+        let builder = make_builder();
+        for _ in 0..5 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let b = make_witness(builder.clone(), b_fq);
+
+            let diff = a.sub(&b);
+            let mut restored = diff.add(&b);
+            restored.self_reduce();
+            assert_bigfield_eq(&restored, a_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Edge: mul then div (should cancel)
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_mul_then_div_cancel() {
+        let builder = make_builder();
+        for _ in 0..5 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            if b_fq == Fq::zero() { continue; }
+            let a = make_witness(builder.clone(), a_fq);
+            let b = make_witness(builder.clone(), b_fq);
+
+            let prod = a.mul(&b);
+            let restored = prod.div(&b);
+            assert_bigfield_eq(&restored, a_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Multiple assert_equal patterns
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_assert_equal_after_chain() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+
+        // (a + b) - b should equal a
+        let sum = a.add(&b);
+        let result = sum.sub(&b);
+        result.assert_equal(&a, "(a+b)-b should equal a");
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Madd identity: a*1 + 0 = a
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_madd_identity() {
+        let builder = make_builder();
+        for _ in 0..5 {
+            let (a_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let one = make_witness(builder.clone(), Fq::one());
+            let result = a.madd(&one, &[]);
+            assert_bigfield_eq(&result, a_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Nonnormalized field bug regression
+    //  Port of C++ test_nonnormalized_field_bug_regression
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_nonnormalized_field_bug_regression() {
+        // Construct a bigfield where limb 0 has a value just at the default max boundary
+        let builder = make_builder();
+        let two_to_68 = U256::from(1u64).wrapping_shl_vartime(NUM_LIMB_BITS as u32);
+        let bf = BFq::from_u256(Some(builder.clone()), two_to_68);
+
+        // Assert invariant: actual value <= maximum value for every limb
+        for i in 0..4 {
+            let witness_val = {
+                let v = bf.binary_basis_limbs[i].element.get_value().from_montgomery_form();
+                U256::from_words(v.data)
+            };
+            let max_val = bf.binary_basis_limbs[i].maximum_value;
+            assert!(
+                max_val >= witness_val,
+                "nonnormalized bug: limb[{}] max {} < witness {}",
+                i, max_val, witness_val
+            );
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Double negation roundtrip
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_double_negate() {
+        let builder = make_builder();
+        for _ in 0..5 {
+            let (a_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let mut neg = a.negate();
+            neg = neg.negate();
+            neg.self_reduce();
+            assert_bigfield_eq(&neg, a_fq);
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Associativity and commutativity
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_add_commutativity() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+
+        let mut ab = a.add(&b);
+        let mut ba = b.add(&a);
+        ab.self_reduce();
+        ba.self_reduce();
+        ab.assert_equal(&ba, "a+b should equal b+a");
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_mul_commutativity() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+
+        let ab = a.mul(&b);
+        let ba = b.mul(&a);
+        ab.assert_equal(&ba, "a*b should equal b*a");
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_add_associativity() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let (c_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+        let c = make_witness(builder.clone(), c_fq);
+
+        let mut ab_c = a.add(&b).add(&c);
+        let mut a_bc = a.add(&b.add(&c));
+        ab_c.self_reduce();
+        a_bc.self_reduce();
+        ab_c.assert_equal(&a_bc, "(a+b)+c should equal a+(b+c)");
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    #[test]
+    fn test_mul_associativity() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let (c_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+        let c = make_witness(builder.clone(), c_fq);
+
+        let ab_c = a.mul(&b).mul(&c);
+        let a_bc = a.mul(&b.mul(&c));
+        ab_c.assert_equal(&a_bc, "(a*b)*c should equal a*(b*c)");
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Distributivity: a*(b+c) = a*b + a*c
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_distributivity() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let (c_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+        let c = make_witness(builder.clone(), c_fq);
+
+        let lhs = a.mul(&b.add(&c));    // a*(b+c)
+        let mut rhs = a.mul(&b).add(&a.mul(&c)); // a*b + a*c
+        rhs.self_reduce();
+        lhs.assert_equal(&rhs, "distributivity: a*(b+c) should equal a*b + a*c");
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Madd consistency: a.madd(b, [c]) == a*b + c
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_madd_consistency() {
+        let builder = make_builder();
+        for _ in 0..5 {
+            let (a_fq, _) = random_fq();
+            let (b_fq, _) = random_fq();
+            let (c_fq, _) = random_fq();
+            let a = make_witness(builder.clone(), a_fq);
+            let b = make_witness(builder.clone(), b_fq);
+            let c = make_witness(builder.clone(), c_fq);
+
+            let madd_result = a.madd(&b, &[&c]);
+            let manual = a.mul(&b).add(&c);
+
+            madd_result.assert_equal(&manual, "madd should equal mul + add");
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Reduction: reduction_check after many subtractions
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_reduction_check_after_subtractions() {
+        let builder = make_builder();
+        let (a_fq, _) = random_fq();
+        let (b_fq, _) = random_fq();
+        let a = make_witness(builder.clone(), a_fq);
+        let b = make_witness(builder.clone(), b_fq);
+
+        let mut c = a.clone();
+        for _ in 0..20 {
+            c = c.sub(&b);
+        }
+        c.reduction_check();
+
+        let max_unreduced = get_maximum_unreduced_limb_value::<Bn254FrParams>();
+        for i in 0..4 {
+            assert!(
+                c.binary_basis_limbs[i].maximum_value <= max_unreduced,
+                "reduction_check after subs: limb {} max too large", i
+            );
+        }
+        assert!(check_circuit(&builder).is_ok());
+    }
 }
