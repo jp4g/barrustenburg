@@ -43,7 +43,7 @@ impl<P: FieldParams> ByteArrayT<P> {
 
     /// Internal: wrap an existing vector of (already-constrained) field
     /// elements. No range constraints are added.
-    fn from_values(ctx: Option<BuilderRef<P>>, values: Vec<FieldT<P>>) -> Self {
+    pub(crate) fn from_values(ctx: Option<BuilderRef<P>>, values: Vec<FieldT<P>>) -> Self {
         Self {
             context: ctx,
             values,
