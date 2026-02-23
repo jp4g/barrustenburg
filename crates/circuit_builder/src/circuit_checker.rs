@@ -166,6 +166,35 @@ impl UltraCircuitChecker {
         let eta_two = Field::<P>::random_element();
         let eta_three = Field::<P>::random_element();
 
+        // Step 5b: Compute memory record wire values (w4) for RAM/ROM gates.
+        // The record wire is a linear combination: w3*eta3 + w2*eta2 + w1*eta [+ 1 for writes]
+        // This must be computed here since the record value depends on the random eta challenges.
+        {
+            let mem_offset = builder.blocks.memory.block.trace_offset as usize;
+            let mem_size = builder.blocks.memory.size();
+            let read_set: std::collections::HashSet<u32> =
+                builder.memory_read_records.iter().copied().collect();
+            let write_set: std::collections::HashSet<u32> =
+                builder.memory_write_records.iter().copied().collect();
+            for row in 0..mem_size {
+                let trace_row = mem_offset + row;
+                let row_u32 = row as u32;
+                if read_set.contains(&row_u32) {
+                    let w1 = polys.data[col::W_L][trace_row];
+                    let w2 = polys.data[col::W_R][trace_row];
+                    let w3 = polys.data[col::W_O][trace_row];
+                    polys.data[col::W_4][trace_row] =
+                        w3 * eta_three + w2 * eta_two + w1 * eta;
+                } else if write_set.contains(&row_u32) {
+                    let w1 = polys.data[col::W_L][trace_row];
+                    let w2 = polys.data[col::W_R][trace_row];
+                    let w3 = polys.data[col::W_O][trace_row];
+                    polys.data[col::W_4][trace_row] =
+                        w3 * eta_three + w2 * eta_two + w1 * eta + Field::one();
+                }
+            }
+        }
+
         // Step 6: Compute public input delta
         let public_input_values: Vec<Field<P>> = builder
             .base

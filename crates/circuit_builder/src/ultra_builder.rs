@@ -1844,6 +1844,90 @@ impl<P: FieldParams> UltraCircuitBuilder<P> {
         output_witness
     }
 
+    /// Set a ROM element pair at `index_value` to `(value_witnesses[0], value_witnesses[1])`.
+    ///
+    /// Used for twin ROM tables where each cell stores two values.
+    pub fn set_rom_element_pair(
+        &mut self,
+        rom_id: usize,
+        index_value: usize,
+        value_witnesses: [u32; 2],
+    ) {
+        assert!(
+            rom_id < self.rom_arrays.len(),
+            "ROM array index out of bounds"
+        );
+        assert!(
+            index_value < self.rom_arrays[rom_id].state.len(),
+            "ROM element index out of bounds"
+        );
+        assert_eq!(
+            self.rom_arrays[rom_id].state[index_value][0],
+            UNINITIALIZED_MEMORY_RECORD,
+            "ROM element already initialized"
+        );
+
+        let index_witness = self.put_constant_variable(Field::from(index_value as u64));
+        self.rom_arrays[rom_id].state[index_value] = value_witnesses;
+
+        let record = RomRecord {
+            index_witness,
+            value_column1_witness: value_witnesses[0],
+            value_column2_witness: value_witnesses[1],
+            index: index_value as u32,
+            record_witness: 0,
+            gate_index: 0,
+        };
+
+        self.create_rom_gate(rom_id, record);
+    }
+
+    /// Read a ROM element pair at `index_witness`.
+    ///
+    /// Returns witness indices for both values `[value1, value2]`.
+    pub fn read_rom_array_pair(&mut self, rom_id: usize, index_witness: u32) -> [u32; 2] {
+        assert!(rom_id < self.rom_arrays.len());
+        let index_value = {
+            let val = self.base.get_variable(index_witness);
+            val.from_montgomery_form().data[0] as usize
+        };
+        assert!(
+            index_value < self.rom_arrays[rom_id].state.len(),
+            "ROM read index out of bounds"
+        );
+        assert_ne!(
+            self.rom_arrays[rom_id].state[index_value][0],
+            UNINITIALIZED_MEMORY_RECORD,
+            "ROM element not initialized"
+        );
+        assert_ne!(
+            self.rom_arrays[rom_id].state[index_value][1],
+            UNINITIALIZED_MEMORY_RECORD,
+            "ROM element pair second value not initialized"
+        );
+
+        let val1 = self
+            .base
+            .get_variable(self.rom_arrays[rom_id].state[index_value][0]);
+        let val2 = self
+            .base
+            .get_variable(self.rom_arrays[rom_id].state[index_value][1]);
+        let out1 = self.base.add_variable(val1);
+        let out2 = self.base.add_variable(val2);
+
+        let record = RomRecord {
+            index_witness,
+            value_column1_witness: out1,
+            value_column2_witness: out2,
+            index: index_value as u32,
+            record_witness: 0,
+            gate_index: 0,
+        };
+
+        self.create_rom_gate(rom_id, record);
+        [out1, out2]
+    }
+
     /// Internal: create a ROM gate and record it in the transcript.
     fn create_rom_gate(&mut self, rom_id: usize, mut record: RomRecord) {
         record.record_witness = self.base.add_variable(Field::zero());
@@ -1865,17 +1949,22 @@ impl<P: FieldParams> UltraCircuitBuilder<P> {
     }
 
     /// Internal: create a sorted ROM gate (used during finalization).
-    fn create_sorted_rom_gate(&mut self, record: &RomRecord) {
+    ///
+    /// Creates a new record_witness and populates the memory block.
+    /// Returns the record_witness index for tag assignment.
+    fn create_sorted_rom_gate(&mut self, record: &RomRecord) -> u32 {
+        let record_witness = self.base.add_variable(Field::zero());
         self.blocks.memory.block.populate_wires(
             record.index_witness,
             record.value_column1_witness,
             record.value_column2_witness,
-            record.record_witness,
+            record_witness,
         );
         self.apply_memory_selectors(MemorySelector::RomConsistencyCheck);
         self.blocks.memory.set_gate_selector(Field::from(1u64));
         self.check_selector_length_consistency();
         self.base.increment_num_gates(1);
+        record_witness
     }
 
     /// Process a single ROM array during finalization.
@@ -1886,31 +1975,47 @@ impl<P: FieldParams> UltraCircuitBuilder<P> {
         let sorted_tag = self.get_new_tag();
         self.set_tau_transposition(read_tag, sorted_tag);
 
-        // Initialize any uninitialized cells with zeros
+        // Initialize any uninitialized cells with zeros (both columns)
         let array_len = self.rom_arrays[rom_id].state.len();
         for i in 0..array_len {
             if self.rom_arrays[rom_id].state[i][0] == UNINITIALIZED_MEMORY_RECORD {
                 let zero = self.base.zero_idx();
-                self.set_rom_element(rom_id, i, zero);
+                self.set_rom_element_pair(rom_id, i, [zero, zero]);
             }
         }
 
         // Sort records by (index, gate_index)
         self.rom_arrays[rom_id].records.sort();
 
-        // Process each record: create sorted ROM gate, assign tags
+        // Process each record: create new witness copies and sorted ROM gate.
+        // The sorted gate uses fresh witness copies (not the original ones) because
+        // the permutation relationship is enforced via tags, not copy constraints.
         let records: Vec<RomRecord> = self.rom_arrays[rom_id].records.clone();
         for record in &records {
-            self.create_sorted_rom_gate(record);
+            let index = record.index;
+            let value1 = self.base.get_variable(record.value_column1_witness);
+            let value2 = self.base.get_variable(record.value_column2_witness);
+            let index_witness = self.base.add_variable(Field::from(index as u64));
+            let value1_witness = self.base.add_variable(value1);
+            let value2_witness = self.base.add_variable(value2);
+
+            let sorted_record = RomRecord {
+                index_witness,
+                value_column1_witness: value1_witness,
+                value_column2_witness: value2_witness,
+                index,
+                record_witness: 0,
+                gate_index: 0,
+            };
+
+            let sorted_record_witness = self.create_sorted_rom_gate(&sorted_record);
 
             let sorted_gate_index = (self.blocks.memory.size() - 1) as u32;
             self.assign_tag(record.record_witness, read_tag);
-
-            // Create a record witness for the sorted gate
-            let sorted_record_witness = self.base.add_variable(Field::zero());
             self.assign_tag(sorted_record_witness, sorted_tag);
 
             self.memory_read_records.push(sorted_gate_index);
+            self.memory_read_records.push(record.gate_index as u32);
         }
 
         // Add a final dummy gate with max_index + 1 to bound the sorted list
@@ -2073,46 +2178,51 @@ impl<P: FieldParams> UltraCircuitBuilder<P> {
     }
 
     /// Internal: create a sorted RAM gate (used during finalization).
-    fn create_sorted_ram_gate(&mut self, record: &RamRecord) {
+    fn create_sorted_ram_gate(&mut self, record: &RamRecord) -> u32 {
+        let record_witness = self.base.add_variable(Field::zero());
+        self.apply_memory_selectors(MemorySelector::RamConsistencyCheck);
         self.blocks.memory.block.populate_wires(
             record.index_witness,
             record.timestamp_witness,
             record.value_witness,
-            record.record_witness,
+            record_witness,
         );
-        self.apply_memory_selectors(MemorySelector::RamConsistencyCheck);
         self.blocks.memory.set_gate_selector(Field::from(1u64));
         self.check_selector_length_consistency();
         self.base.increment_num_gates(1);
+        record_witness
     }
 
     /// Internal: create the final sorted RAM gate (bounds check + timestamp delta).
-    fn create_final_sorted_ram_gate(&mut self, record: &RamRecord, ram_array_size: u64) {
+    ///
+    /// Returns the record_witness for tag assignment.
+    fn create_final_sorted_ram_gate(&mut self, record: &RamRecord, ram_array_size: u64) -> u32 {
+        let record_witness = self.base.add_variable(Field::zero());
         let zero = self.base.zero_idx();
         self.create_unconstrained_gate(
             UltraBlockIndex::Memory,
             record.index_witness,
             record.timestamp_witness,
             record.value_witness,
-            record.record_witness,
+            record_witness,
         );
 
         // Constrain final index to equal ram_array_size - 1
-        let size_minus_one = self.put_constant_variable(Field::from(ram_array_size - 1));
         self.create_big_add_gate(
             &AddQuad {
                 a: record.index_witness,
                 b: zero,
                 c: zero,
-                d: size_minus_one,
+                d: zero,
                 a_scaling: Field::from(1u64),
                 b_scaling: Field::zero(),
                 c_scaling: Field::zero(),
-                d_scaling: -Field::from(1u64),
-                const_scaling: Field::zero(),
+                d_scaling: Field::zero(),
+                const_scaling: -Field::from(ram_array_size - 1),
             },
             false,
         );
+        record_witness
     }
 
     /// Process a single RAM array during finalization.
@@ -2142,56 +2252,101 @@ impl<P: FieldParams> UltraCircuitBuilder<P> {
         let num_records = records.len();
         let max_timestamp = self.ram_arrays[ram_id].access_count;
 
-        // Create sorted gates and assign tags
+        // Create sorted gates with fresh witness copies
+        let mut sorted_ram_records: Vec<RamRecord> = Vec::new();
         for (i, record) in records.iter().enumerate() {
+            let index = record.index;
+            let value = self.base.get_variable(record.value_witness);
+            let index_witness = self.base.add_variable(Field::from(index as u64));
+            let timestamp_witness = self.base.add_variable(Field::from(record.timestamp as u64));
+            let value_witness = self.base.add_variable(value);
+
+            let mut sorted_record = RamRecord {
+                index_witness,
+                timestamp_witness,
+                value_witness,
+                index,
+                timestamp: record.timestamp,
+                access_type: record.access_type,
+                record_witness: 0,
+                gate_index: 0,
+            };
+
             let is_last = i == num_records - 1;
-
-            if is_last {
-                self.create_final_sorted_ram_gate(record, array_size as u64);
+            let sorted_record_witness = if is_last {
+                sorted_record.gate_index = self.blocks.memory.size();
+                self.create_final_sorted_ram_gate(&sorted_record, array_size as u64)
             } else {
-                self.create_sorted_ram_gate(record);
-            }
+                let rw = self.create_sorted_ram_gate(&sorted_record);
+                sorted_record.gate_index = self.blocks.memory.size() - 1;
+                rw
+            };
+            sorted_record.record_witness = sorted_record_witness;
+            sorted_ram_records.push(sorted_record);
 
-            let sorted_gate_index = (self.blocks.memory.size() - 1) as u32;
+            let sorted_gate_index = sorted_ram_records.last().unwrap().gate_index as u32;
             self.assign_tag(record.record_witness, access_tag);
-
-            let sorted_record_witness = self.base.add_variable(Field::zero());
             self.assign_tag(sorted_record_witness, sorted_tag);
 
             match record.access_type {
-                RamAccessType::Read => self.memory_read_records.push(sorted_gate_index),
-                RamAccessType::Write => self.memory_write_records.push(sorted_gate_index),
+                RamAccessType::Read => {
+                    self.memory_read_records.push(sorted_gate_index);
+                    self.memory_read_records.push(record.gate_index as u32);
+                }
+                RamAccessType::Write => {
+                    self.memory_write_records.push(sorted_gate_index);
+                    self.memory_write_records.push(record.gate_index as u32);
+                }
             }
         }
 
-        // Compute timestamp deltas between adjacent same-index records
-        // and range-constrain them
+        // Compute timestamp deltas between adjacent sorted records and range-constrain them
+        if sorted_ram_records.len() <= 1 {
+            return;
+        }
         let mut timestamp_deltas = Vec::new();
-        for i in 1..num_records {
-            if records[i].index == records[i - 1].index {
-                let delta = records[i].timestamp.saturating_sub(records[i - 1].timestamp);
-                let delta_witness = self.base.add_variable(Field::from(delta as u64));
-                timestamp_deltas.push(delta_witness);
+        for i in 0..sorted_ram_records.len() - 1 {
+            let current = &sorted_ram_records[i];
+            let next = &sorted_ram_records[i + 1];
 
-                // Create timestamp check gate
-                self.blocks.memory.block.populate_wires(
-                    records[i - 1].timestamp_witness,
-                    records[i].timestamp_witness,
-                    delta_witness,
-                    self.base.zero_idx(),
-                );
-                self.apply_memory_selectors(MemorySelector::RamTimestampCheck);
-                self.blocks.memory.set_gate_selector(Field::from(1u64));
-                self.check_selector_length_consistency();
-                self.base.increment_num_gates(1);
-            }
+            let share_index = current.index == next.index;
+            let timestamp_delta = if share_index {
+                Field::from((next.timestamp - current.timestamp) as u64)
+            } else {
+                Field::zero()
+            };
+
+            let timestamp_delta_witness = self.base.add_variable(timestamp_delta);
+            timestamp_deltas.push(timestamp_delta_witness);
+
+            self.apply_memory_selectors(MemorySelector::RamTimestampCheck);
+            self.blocks.memory.block.populate_wires(
+                current.index_witness,
+                current.timestamp_witness,
+                timestamp_delta_witness,
+                self.base.zero_idx(),
+            );
+            self.blocks.memory.set_gate_selector(Field::from(1u64));
+            self.check_selector_length_consistency();
+            self.base.increment_num_gates(1);
         }
+
+        // Add trailing unconstrained gate with last sorted record's index/timestamp
+        let last = sorted_ram_records.last().unwrap();
+        let zero = self.base.zero_idx();
+        self.create_unconstrained_gate(
+            UltraBlockIndex::Memory,
+            last.index_witness,
+            last.timestamp_witness,
+            zero,
+            zero,
+        );
 
         // Range-constrain timestamp deltas
         if max_timestamp > 0 {
-            let num_bits = 64 - (max_timestamp as u64).leading_zeros() as usize;
+            let max_ts = max_timestamp - 1;
             for &delta_witness in &timestamp_deltas {
-                self.create_range_constraint(delta_witness, num_bits, "RAM timestamp delta range");
+                self.create_new_range_constraint(delta_witness, max_ts as u64, "RAM timestamp delta range");
             }
         }
     }
@@ -2462,19 +2617,114 @@ impl<P: FieldParams> UltraCircuitBuilder<P> {
         self.base.increment_num_gates(1);
     }
 
+    /// Create a Poseidon2 external end row (all selectors zero, no constraints).
+    ///
+    /// Used after the last gate in an external round sequence to hold the output state.
+    /// The shift of the preceding active gate references these wire values, so they
+    /// must equal the computed output of that gate's round.
+    pub fn create_poseidon2_external_end_row(&mut self, a: u32, b: u32, c: u32, d: u32) {
+        self.base.assert_valid_variables(&[a, b, c, d]);
+        self.blocks
+            .poseidon2_external
+            .block
+            .populate_wires(a, b, c, d);
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_m_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_1_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_2_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_3_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_c_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .set_gate_selector(Field::zero());
+        self.check_selector_length_consistency();
+        self.base.increment_num_gates(1);
+    }
+
+    /// Create a Poseidon2 internal end row (all selectors zero, no constraints).
+    ///
+    /// Used after the last gate in an internal round sequence to hold the output state.
+    pub fn create_poseidon2_internal_end_row(&mut self, a: u32, b: u32, c: u32, d: u32) {
+        self.base.assert_valid_variables(&[a, b, c, d]);
+        self.blocks
+            .poseidon2_internal
+            .block
+            .populate_wires(a, b, c, d);
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_m_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_1_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_2_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_3_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_c_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .set_gate_selector(Field::zero());
+        self.check_selector_length_consistency();
+        self.base.increment_num_gates(1);
+    }
+
     /// Get Poseidon2 round constants for BN254. Returns [rc0, rc1, rc2, rc3].
     ///
     /// This is a helper that converts from the crypto crate's round constant format
     /// into field elements compatible with our generic P parameter.
+    /// Uses `from_raw` since ROUND_CONSTANTS are already in Montgomery form.
     /// NOTE: This only works correctly when P = Bn254FrParams.
     fn get_poseidon2_round_constants(round_idx: usize) -> [Field<P>; 4] {
         use bbrs_crypto::poseidon2::params::ROUND_CONSTANTS;
         let rc = &(*ROUND_CONSTANTS)[round_idx];
         [
-            Field::from_limbs(rc[0].data),
-            Field::from_limbs(rc[1].data),
-            Field::from_limbs(rc[2].data),
-            Field::from_limbs(rc[3].data),
+            Field::from_raw(rc[0].data),
+            Field::from_raw(rc[1].data),
+            Field::from_raw(rc[2].data),
+            Field::from_raw(rc[3].data),
         ]
     }
 
