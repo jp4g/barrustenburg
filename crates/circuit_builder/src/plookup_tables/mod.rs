@@ -9,6 +9,7 @@ pub mod fixed_base;
 pub mod fixed_base_params;
 pub mod keccak;
 pub mod non_native_group_generator;
+pub mod plookup_tables;
 pub mod sha256;
 pub mod sparse;
 pub mod types;

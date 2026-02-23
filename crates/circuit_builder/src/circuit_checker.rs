@@ -155,12 +155,45 @@ impl UltraCircuitChecker {
         // Step 4: Populate table polynomials from lookup tables
         Self::populate_tables(&builder, &mut polys);
 
+        // Step 4b: Set shifted polynomials early so lookup computations can use wire shifts.
+        // Z_PERM_SHIFT will be updated again after compute_grand_product_perm.
+        Self::set_shifted(&mut polys, circuit_size);
+
         // Step 5: Generate random challenges
         let beta = Field::<P>::random_element();
         let gamma = Field::<P>::random_element();
         let eta = Field::<P>::random_element();
         let eta_two = Field::<P>::random_element();
         let eta_three = Field::<P>::random_element();
+
+        // Step 5b: Compute memory record wire values (w4) for RAM/ROM gates.
+        // The record wire is a linear combination: w3*eta3 + w2*eta2 + w1*eta [+ 1 for writes]
+        // This must be computed here since the record value depends on the random eta challenges.
+        {
+            let mem_offset = builder.blocks.memory.block.trace_offset as usize;
+            let mem_size = builder.blocks.memory.size();
+            let read_set: std::collections::HashSet<u32> =
+                builder.memory_read_records.iter().copied().collect();
+            let write_set: std::collections::HashSet<u32> =
+                builder.memory_write_records.iter().copied().collect();
+            for row in 0..mem_size {
+                let trace_row = mem_offset + row;
+                let row_u32 = row as u32;
+                if read_set.contains(&row_u32) {
+                    let w1 = polys.data[col::W_L][trace_row];
+                    let w2 = polys.data[col::W_R][trace_row];
+                    let w3 = polys.data[col::W_O][trace_row];
+                    polys.data[col::W_4][trace_row] =
+                        w3 * eta_three + w2 * eta_two + w1 * eta;
+                } else if write_set.contains(&row_u32) {
+                    let w1 = polys.data[col::W_L][trace_row];
+                    let w2 = polys.data[col::W_R][trace_row];
+                    let w3 = polys.data[col::W_O][trace_row];
+                    polys.data[col::W_4][trace_row] =
+                        w3 * eta_three + w2 * eta_two + w1 * eta + Field::one();
+                }
+            }
+        }
 
         // Step 6: Compute public input delta
         let public_input_values: Vec<Field<P>> = builder
@@ -197,7 +230,7 @@ impl UltraCircuitChecker {
         // Step 9: Compute lookup inverses
         Self::compute_lookup_inverses(&mut polys, &params, circuit_size);
 
-        // Step 10: Set shifted polynomials
+        // Step 10: Re-set shifted polynomials now that Z_PERM is computed
         Self::set_shifted(&mut polys, circuit_size);
 
         // Step 11: Check all relations
@@ -376,16 +409,19 @@ impl UltraCircuitChecker {
         }
 
         // Collect all table entries from all lookup tables.
-        // Each lookup_gate entry is a Vec<Field<P>> with up to 4 columns.
+        // Each lookup_gate entry is a Vec<Field<P>> with 3 column values,
+        // and the 4th column (TABLE_4) is the table_index from the BasicTable.
         let mut table_entries: Vec<[Field<P>; 4]> = Vec::new();
         for table in &builder.lookup_tables {
+            let table_idx = Field::<P>::from(table.table_index);
             for gate in &table.lookup_gates {
                 let mut entry = [Field::<P>::zero(); 4];
                 for (col, val) in gate.iter().enumerate() {
-                    if col < 4 {
+                    if col < 3 {
                         entry[col] = *val;
                     }
                 }
+                entry[3] = table_idx;
                 table_entries.push(entry);
             }
         }
@@ -453,18 +489,28 @@ impl UltraCircuitChecker {
                 continue;
             }
 
-            // The lookup value is: w_1 + gamma + q_r*w_2*eta + w_3*eta^2 + q_c*eta^3
+            // Derive table entries from accumulator wires and step-size selectors:
+            //   derived_entry_i = w_i + negative_step_size_i * w_i_shift
             let w_1 = polys.data[col::W_L][trace_row];
             let w_2 = polys.data[col::W_R][trace_row];
             let w_3 = polys.data[col::W_O][trace_row];
+            let w_1_shift = polys.data[col::W_L_SHIFT][trace_row];
+            let w_2_shift = polys.data[col::W_R_SHIFT][trace_row];
+            let w_3_shift = polys.data[col::W_O_SHIFT][trace_row];
 
-            // Find matching table entry by comparing combined values
-            let mut combined = w_1 + params.gamma;
-            let q_r = polys.data[col::Q_R][trace_row];
-            let q_c = polys.data[col::Q_C][trace_row];
-            combined = combined + q_r * w_2 * params.eta;
-            combined = combined + w_3 * params.eta_two;
-            combined = combined + q_c * params.eta_three;
+            let neg_step_1 = polys.data[col::Q_R][trace_row]; // q_2 = -column_1_step_size
+            let neg_step_2 = polys.data[col::Q_M][trace_row]; // q_m = -column_2_step_size
+            let neg_step_3 = polys.data[col::Q_C][trace_row]; // q_c = -column_3_step_size
+            let table_index = polys.data[col::Q_O][trace_row]; // q_3 = table_index
+
+            let derived_1 = w_1 + neg_step_1 * w_1_shift + params.gamma;
+            let derived_2 = w_2 + neg_step_2 * w_2_shift;
+            let derived_3 = w_3 + neg_step_3 * w_3_shift;
+
+            let combined = derived_1
+                + derived_2 * params.eta
+                + derived_3 * params.eta_two
+                + table_index * params.eta_three;
 
             // Search through table entries for a match
             for i in 0..total_table_entries {
@@ -565,15 +611,26 @@ impl UltraCircuitChecker {
 
             has_inverse[i] = true;
 
-            // read_term denominator: w_1 + gamma + q_r*w_2*eta + w_3*eta^2 + q_c*eta^3
+            // read_term denominator: derived entries from accumulator wires + step sizes
             let w_1 = polys.data[col::W_L][i];
             let w_2 = polys.data[col::W_R][i];
             let w_3 = polys.data[col::W_O][i];
-            let q_r = polys.data[col::Q_R][i];
-            let q_c = polys.data[col::Q_C][i];
-            let read_denom = w_1 + params.gamma + q_r * w_2 * params.eta
-                + w_3 * params.eta_two
-                + q_c * params.eta_three;
+            let w_1_shift = polys.data[col::W_L_SHIFT][i];
+            let w_2_shift = polys.data[col::W_R_SHIFT][i];
+            let w_3_shift = polys.data[col::W_O_SHIFT][i];
+
+            let neg_step_1 = polys.data[col::Q_R][i]; // q_2
+            let neg_step_2 = polys.data[col::Q_M][i]; // q_m
+            let neg_step_3 = polys.data[col::Q_C][i]; // q_c
+            let table_index = polys.data[col::Q_O][i]; // q_3
+
+            let derived_1 = w_1 + neg_step_1 * w_1_shift + params.gamma;
+            let derived_2 = w_2 + neg_step_2 * w_2_shift;
+            let derived_3 = w_3 + neg_step_3 * w_3_shift;
+            let read_denom = derived_1
+                + derived_2 * params.eta
+                + derived_3 * params.eta_two
+                + table_index * params.eta_three;
 
             // write_term denominator: table_1 + gamma + table_2*eta + table_3*eta^2 + table_4*eta^3
             let t1 = polys.data[col::TABLE_1][i];

@@ -32,7 +32,17 @@ fn compute_write_term<P: FieldParams>(
 }
 
 /// Compute the read term for the lookup relation.
-/// read_term = 1 / (w_1 + gamma + q_r*w_2*eta + w_3*eta^2 + q_c*eta^3)
+///
+/// The wire values for lookup gates are accumulators structured so that the differences
+/// w_i + step_size*w_i_shift yield entries present in column i of the corresponding table.
+///
+/// read_term = 1 / (derived_entry_1 + derived_entry_2*eta + derived_entry_3*eta^2 + table_index*eta^3)
+///
+/// where:
+///   derived_entry_1 = w_1 + q_r*w_1_shift + gamma
+///   derived_entry_2 = w_2 + q_m*w_2_shift
+///   derived_entry_3 = w_3 + q_c*w_3_shift
+///   table_index     = q_o
 fn compute_read_term<P: FieldParams>(
     input: &InputElements<P>,
     params: &RelationParameters<Field<P>>,
@@ -40,13 +50,23 @@ fn compute_read_term<P: FieldParams>(
     let w_1 = input.w_l();
     let w_2 = input.w_r();
     let w_3 = input.w_o();
-    let q_r = input.q_r();
-    let q_c = input.q_c();
+    let w_1_shift = input.w_l_shift();
+    let w_2_shift = input.w_r_shift();
+    let w_3_shift = input.w_o_shift();
 
-    let mut read_term = w_1 + params.gamma;
-    read_term = read_term + q_r * w_2 * params.eta;
-    read_term = read_term + w_3 * params.eta_two;
-    read_term = read_term + q_c * params.eta_three;
+    let negative_column_1_step_size = input.q_r();
+    let negative_column_2_step_size = input.q_m();
+    let negative_column_3_step_size = input.q_c();
+    let table_index = input.q_o();
+
+    let derived_entry_1 = w_1 + negative_column_1_step_size * w_1_shift + params.gamma;
+    let derived_entry_2 = w_2 + negative_column_2_step_size * w_2_shift;
+    let derived_entry_3 = w_3 + negative_column_3_step_size * w_3_shift;
+
+    let mut read_term = derived_entry_1;
+    read_term = read_term + derived_entry_2 * params.eta;
+    read_term = read_term + derived_entry_3 * params.eta_two;
+    read_term = read_term + table_index * params.eta_three;
 
     read_term.invert()
 }
