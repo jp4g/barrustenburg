@@ -1,17 +1,17 @@
 # Package 6 — Test Audit Report
 
-**Generated**: 2026-02-23
-**Workspace test result**: 1,268 passed, 0 failed, 2 ignored
+**Generated**: 2026-02-23 (updated after B32/B33 test gap fills)
+**Workspace test result**: 1,408 passed, 0 failed, 2 ignored
 
 ## Summary
 
 | Metric | Count |
 |--------|-------|
 | C++ tests in Pkg6 scope | 561 |
-| Rust tests (circuit_builder + stdlib + ultra_honk) | 602 |
+| Rust tests (circuit_builder + stdlib + ultra_honk) | 742 |
 | All tests passing | Yes |
 
-The Rust count exceeds C++ because polecats added extra tests for plookup tables, execution traces, and builder internals that don't have direct C++ test file equivalents (C++ tests those implicitly via integration tests).
+The Rust count exceeds C++ because polecats added extra tests for plookup tables, execution traces, builder internals, and comprehensive parametric variants that don't have direct C++ test file equivalents.
 
 ---
 
@@ -48,17 +48,17 @@ The Rust count exceeds C++ because polecats added extra tests for plookup tables
 | twin_rom_table.test.cpp | 2 | primitives/memory/twin_rom_table.rs | 4 | COVERED+ |
 | plookup.test.cpp | 7 | primitives/plookup.rs | 7 | COVERED |
 | logic.test.cpp | 3 | primitives/logic.rs | 4 | COVERED+ |
-| bigfield.test.cpp | 92 | primitives/bigfield.rs | 52 | PARTIAL |
-| bigfield_edge_cases.test.cpp | 22 | primitives/bigfield.rs | (included above) | PARTIAL |
-| biggroup.test.cpp | 79 | primitives/biggroup.rs | 28 | PARTIAL |
-| biggroup_secp256k1.test.cpp | 9 | primitives/biggroup.rs | (included above) | PARTIAL |
-| biggroup_goblin.test.cpp | 4 | primitives/biggroup.rs | (included above) | PARTIAL |
+| bigfield.test.cpp | 92 | primitives/bigfield.rs | 115 | COVERED+ |
+| bigfield_edge_cases.test.cpp | 22 | primitives/bigfield.rs | (included above) | COVERED+ |
+| biggroup.test.cpp | 79 | primitives/biggroup.rs | 105 | COVERED+ |
+| biggroup_secp256k1.test.cpp | 9 | primitives/biggroup.rs | (included above) | COVERED+ |
+| biggroup_goblin.test.cpp | 4 | primitives/biggroup.rs | (included above) | COVERED+ |
 | cycle_group.test.cpp | 50 | primitives/group/tests.rs | 65 | COVERED+ |
 | cycle_scalar.test.cpp | 4 | primitives/group/tests.rs | (included above) | COVERED |
 | straus_lookup_table.test.cpp | 4 | primitives/group/tests.rs | (included above) | COVERED |
 | straus_scalar_slice.test.cpp | 1 | primitives/group/tests.rs | (included above) | COVERED |
 
-**Subtotal**: 399 C++ → 393 Rust (stdlib crate, primitives + witness)
+**Subtotal**: 399 C++ → 533 Rust (stdlib crate, primitives + witness)
 
 ### Stdlib Hash (B17, B19-B22)
 
@@ -107,30 +107,23 @@ The Rust count exceeds C++ because polecats added extra tests for plookup tables
 
 ---
 
-## PARTIAL Coverage Details
+## Coverage Notes
 
-### bigfield (52 Rust vs 114 C++)
+### bigfield (115 Rust vs 114 C++)
 
-The C++ bigfield tests are heavily parameterized (TYPED_TEST across multiple field types). Our Rust implementation covers the core operations but doesn't replicate every parametric variant. Key coverage:
-- Core arithmetic (add, sub, mul, div, sqr): COVERED
-- Comparison operators: COVERED
-- Field reduction and normalization: COVERED
-- Edge cases (overflow, underflow, boundary): COVERED
-- Some advanced parametric variants (e.g., per-limb edge cases): NOT INDIVIDUALLY TESTED
+All C++ parametric test variants now have Rust equivalents. B32 (PR #40) added 63 tests covering:
+- All TYPED_TEST variants for arithmetic, comparison, reduction
+- Edge cases (overflow, underflow, boundary, per-limb)
+- Advanced operations (conditional assignment, byte array round-trip)
 
-**Missing C++ tests not individually ported**: ~62 (mostly parametric variants of existing tests)
+### biggroup (105 Rust vs 92 C++)
 
-### biggroup (28 Rust vs 92 C++)
-
-Similar to bigfield — C++ uses TYPED_TEST and HEAVY_TYPED_TEST macros that expand to many variants. Rust covers:
-- Basic group operations (add, sub, dbl, negate): COVERED
-- Scalar multiplication: COVERED
-- Batch multiplication: COVERED
-- Edge cases (infinity, zero): COVERED
-- secp256k1-specific WNAF tests: NOT INDIVIDUALLY TESTED
-- Many HEAVY_TYPED_TEST variants: NOT INDIVIDUALLY TESTED
-
-**Missing C++ tests not individually ported**: ~64 (mostly heavy/parametric variants)
+All C++ parametric test variants now have Rust equivalents. B33 (PR #41) added 77 tests covering:
+- All TYPED_TEST and HEAVY_TYPED_TEST variants
+- Batch multiplication (various sizes, mixed witness/constant)
+- Edge cases (infinity, cancellation, on-curve validation)
+- secp256k1-specific operations
+- Also fixed `mask_points` context handling and Montgomery form extraction in tests
 
 ---
 
@@ -151,19 +144,13 @@ These C++ test files exist but were intentionally excluded from Pkg6:
 
 ## Verdict
 
-**Package 6 is COMPLETE** with the following caveats:
+**Package 6 is COMPLETE.**
 
-1. **1,268 Rust tests passing, 0 failures** across the full workspace
-2. All C++ test files in scope have corresponding Rust test coverage
-3. **bigfield** and **biggroup** have fewer individual Rust tests than C++ due to C++ parametric test macros (TYPED_TEST/HEAVY_TYPED_TEST) — the core functionality IS tested but not every parametric variant
-4. Several components have MORE Rust tests than C++ (field, bool, byte_array, safe_uint, memory, group, poseidon2, verifiers) indicating thorough porting
+1. **1,408 Rust tests passing, 0 failures** across the full workspace
+2. All C++ test files in scope have corresponding Rust test coverage — **every component at COVERED or COVERED+**
+3. **bigfield** (115 Rust vs 114 C++) and **biggroup** (105 Rust vs 92 C++) now exceed C++ test counts
+4. Several components have MORE Rust tests than C++ (field, bool, byte_array, safe_uint, memory, group, poseidon2, bigfield, biggroup, verifiers)
 5. The 36 E2E tests in ultra_honk validate the full prove/verify pipeline end-to-end
+6. Zero PARTIAL gaps remain — all components fully covered
 
-### Recommendation
-
-The ~126 missing parametric test variants in bigfield/biggroup are low-risk because:
-- The core operations they test ARE covered by existing Rust tests
-- They primarily test the same logic with different type parameters
-- Adding them would be a mechanical expansion, not a correctness concern
-
-**Package 6 can be considered DONE for the purposes of moving to Package 7+.**
+**Package 6 is DONE. Ready for Package 7+.**
