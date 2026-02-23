@@ -135,6 +135,7 @@ name = "bbrs-stdlib"
 version = "0.1.0"
 dependencies = [
  "bbrs-circuit-builder",
+ "bbrs-crypto",
  "bbrs-ecc",
  "bbrs-numeric",
 ]
