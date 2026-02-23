@@ -171,7 +171,7 @@ pub fn get_lookup_accumulators(
 /// Convert a plookup_tables MultiTable to a gate_data MultiTable.
 fn to_gate_multi_table(
     src: &bbrs_circuit_builder::plookup_tables::types::MultiTable,
-) -> gate_data::MultiTable {
+) -> gate_data::MultiTable<P> {
     gate_data::MultiTable {
         id: gate_data::MultiTableId(src.id.0 as u64),
         basic_table_ids: src
@@ -179,21 +179,9 @@ fn to_gate_multi_table(
             .iter()
             .map(|id| gate_data::BasicTableId(id.0 as u64))
             .collect(),
-        column_1_step_sizes: src
-            .column_1_step_sizes
-            .iter()
-            .map(|f| fr_to_u64(f))
-            .collect(),
-        column_2_step_sizes: src
-            .column_2_step_sizes
-            .iter()
-            .map(|f| fr_to_u64(f))
-            .collect(),
-        column_3_step_sizes: src
-            .column_3_step_sizes
-            .iter()
-            .map(|f| fr_to_u64(f))
-            .collect(),
+        column_1_step_sizes: src.column_1_step_sizes.clone(),
+        column_2_step_sizes: src.column_2_step_sizes.clone(),
+        column_3_step_sizes: src.column_3_step_sizes.clone(),
     }
 }
 
@@ -214,12 +202,6 @@ fn to_gate_read_data(
             .push(vec![components[0], components[1], components[2]]);
     }
     dst
-}
-
-/// Convert an Fr field element to u64 (extracts low limb from standard form).
-fn fr_to_u64(f: &Fr) -> u64 {
-    let standard = f.from_montgomery_form();
-    standard.data[0]
 }
 
 #[cfg(test)]

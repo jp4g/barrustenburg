@@ -320,13 +320,16 @@ pub struct MultiTableId(pub u64);
 /// Multi-table: aggregates multiple basic tables with step sizes for accumulation.
 ///
 /// Port of C++ `plookup::MultiTable` (simplified).
+///
+/// Step sizes are full field elements because some tables (e.g. SHA256) have
+/// step sizes that are field-element inverses, not small integers.
 #[derive(Debug, Clone)]
-pub struct MultiTable {
+pub struct MultiTable<P: FieldParams> {
     pub id: MultiTableId,
     pub basic_table_ids: Vec<BasicTableId>,
-    pub column_1_step_sizes: Vec<u64>,
-    pub column_2_step_sizes: Vec<u64>,
-    pub column_3_step_sizes: Vec<u64>,
+    pub column_1_step_sizes: Vec<Field<P>>,
+    pub column_2_step_sizes: Vec<Field<P>>,
+    pub column_3_step_sizes: Vec<Field<P>>,
 }
 
 // ════════════════════════════════════════════════════════════════════════
