@@ -2462,19 +2462,114 @@ impl<P: FieldParams> UltraCircuitBuilder<P> {
         self.base.increment_num_gates(1);
     }
 
+    /// Create a Poseidon2 external end row (all selectors zero, no constraints).
+    ///
+    /// Used after the last gate in an external round sequence to hold the output state.
+    /// The shift of the preceding active gate references these wire values, so they
+    /// must equal the computed output of that gate's round.
+    pub fn create_poseidon2_external_end_row(&mut self, a: u32, b: u32, c: u32, d: u32) {
+        self.base.assert_valid_variables(&[a, b, c, d]);
+        self.blocks
+            .poseidon2_external
+            .block
+            .populate_wires(a, b, c, d);
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_m_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_1_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_2_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_3_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_c_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_external
+            .set_gate_selector(Field::zero());
+        self.check_selector_length_consistency();
+        self.base.increment_num_gates(1);
+    }
+
+    /// Create a Poseidon2 internal end row (all selectors zero, no constraints).
+    ///
+    /// Used after the last gate in an internal round sequence to hold the output state.
+    pub fn create_poseidon2_internal_end_row(&mut self, a: u32, b: u32, c: u32, d: u32) {
+        self.base.assert_valid_variables(&[a, b, c, d]);
+        self.blocks
+            .poseidon2_internal
+            .block
+            .populate_wires(a, b, c, d);
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_m_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_1_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_2_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_3_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_c_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .block
+            .q_4_mut()
+            .push(Field::zero());
+        self.blocks
+            .poseidon2_internal
+            .set_gate_selector(Field::zero());
+        self.check_selector_length_consistency();
+        self.base.increment_num_gates(1);
+    }
+
     /// Get Poseidon2 round constants for BN254. Returns [rc0, rc1, rc2, rc3].
     ///
     /// This is a helper that converts from the crypto crate's round constant format
     /// into field elements compatible with our generic P parameter.
+    /// Uses `from_raw` since ROUND_CONSTANTS are already in Montgomery form.
     /// NOTE: This only works correctly when P = Bn254FrParams.
     fn get_poseidon2_round_constants(round_idx: usize) -> [Field<P>; 4] {
         use bbrs_crypto::poseidon2::params::ROUND_CONSTANTS;
         let rc = &(*ROUND_CONSTANTS)[round_idx];
         [
-            Field::from_limbs(rc[0].data),
-            Field::from_limbs(rc[1].data),
-            Field::from_limbs(rc[2].data),
-            Field::from_limbs(rc[3].data),
+            Field::from_raw(rc[0].data),
+            Field::from_raw(rc[1].data),
+            Field::from_raw(rc[2].data),
+            Field::from_raw(rc[3].data),
         ]
     }
 
