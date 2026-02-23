@@ -5,6 +5,7 @@
 
 use bbrs_ecc::fields::field::Field;
 use bbrs_ecc::fields::field_params::FieldParams;
+use bbrs_ecc::curves::bn254::Bn254FrParams;
 
 use super::input_elements::InputElements;
 use crate::relation_parameters::RelationParameters;
@@ -14,13 +15,16 @@ pub const NUM_SUBRELATIONS: usize = 2;
 
 /// Get the curve b parameter for short Weierstrass: y^2 = x^3 + b.
 ///
-/// For BN254: b = 3, for Grumpkin: b = -17.
-/// Since we're primarily working with BN254, we hardcode b = 3.
-/// The C++ code selects based on modulus comparison.
+/// For BN254 G1: b = 3, for Grumpkin: b = -17.
+/// Selects based on modulus comparison (matching C++ behavior).
 fn get_curve_b<P: FieldParams>() -> Field<P> {
-    // BN254 G1 curve_b = 3
-    // TODO: support Grumpkin by checking the modulus
-    Field::from(3u64)
+    if P::MODULUS == Bn254FrParams::MODULUS {
+        // Grumpkin curve: b = -17
+        Field::zero() - Field::from(17u64)
+    } else {
+        // BN254 G1 curve: b = 3
+        Field::from(3u64)
+    }
 }
 
 /// Accumulate the Elliptic relation.
