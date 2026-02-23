@@ -13,3 +13,5 @@ bbrs-sumcheck = { path = "../sumcheck" }
 bbrs-commitment-schemes = { path = "../commitment_schemes" }
 bbrs-transcript = { path = "../transcript" }
 bbrs-srs = { path = "../srs" }
+bbrs-circuit-builder = { path = "../circuit_builder" }
+bbrs-crypto = { path = "../crypto" }
