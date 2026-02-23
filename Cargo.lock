@@ -163,7 +163,9 @@ dependencies = [
 name = "bbrs-ultra-honk"
 version = "0.1.0"
 dependencies = [
+ "bbrs-circuit-builder",
  "bbrs-commitment-schemes",
+ "bbrs-crypto",
  "bbrs-ecc",
  "bbrs-flavor",
  "bbrs-honk",
